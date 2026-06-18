@@ -75,14 +75,17 @@ async function uploadReferenceAudio(baseUrl: string, referenceAudio: ReferenceAu
   return parseUploadResponse(json);
 }
 
-async function callVoxCPM2(
+// A submission (POST) enqueues remote inference and returns an event id; the result (GET)
+// only reads that queued job's output. Retrying the POST starts a *new* inference, so the
+// two stages need different retry policies — see shouldRetrySubmit and the staged retries below.
+async function submitVoxCPM2Generation(
   baseUrl: string,
   input: GenerateVoiceInput,
   uploadedReferencePath: string,
   scriptChunk: string,
   chunkIndex: number,
   chunkCount: number,
-  useReferenceTranscript = true
+  useReferenceTranscript: boolean
 ) {
   const cloneMode = input.cloneMode || "high_fidelity";
   const cloneStrength = Math.min(3, Math.max(1, input.cloneStrength ?? (cloneMode === "high_fidelity" ? 2.8 : 2.2)));
@@ -129,7 +132,18 @@ async function callVoxCPM2(
     });
   }
 
-  const { response: resultResponse, text: resultText } = await fetchTextWithTimeout(`${baseUrl}/gradio_api/call/generate/${json.event_id}`, {
+  return { eventId: json.event_id, referenceTextRequested: Boolean(referenceText) };
+}
+
+async function fetchVoxCPM2Result(
+  baseUrl: string,
+  eventId: string,
+  input: GenerateVoiceInput,
+  chunkIndex: number,
+  chunkCount: number,
+  referenceTextRequested: boolean
+) {
+  const { response: resultResponse, text: resultText } = await fetchTextWithTimeout(`${baseUrl}/gradio_api/call/generate/${eventId}`, {
     method: "GET",
     headers: { Accept: "text/event-stream" }
   });
@@ -143,12 +157,18 @@ async function callVoxCPM2(
       jobId: input.jobId,
       chunk: chunkIndex + 1,
       chunks: chunkCount,
-      referenceTranscriptRequested: Boolean(referenceText),
+      referenceTranscriptRequested: referenceTextRequested,
       events: JSON.stringify(summarizeRemoteEvents(events)),
       error: diagnosticError(error)
     });
     throw error;
   }
+}
+
+// A submission timeout is ambiguous: the job may already be queued, so re-POSTing would run
+// inference twice. Only retry the submit on an explicit pre-enqueue rejection (429/503).
+function shouldRetrySubmit(error: unknown) {
+  return error instanceof RemoteProviderError && error.retryable;
 }
 
 async function downloadRemoteAudio(audioUrl: string) {
@@ -183,13 +203,6 @@ function diagnosticError(error: unknown) {
   return "Unknown remote inference error";
 }
 
-function shouldFallbackFromTranscript(error: unknown) {
-  return (
-    error instanceof RemoteProviderError &&
-    (error.message.startsWith("Missing audio output") || error.message.startsWith("Remote Space generation error"))
-  );
-}
-
 async function generateRemote(input: GenerateVoiceInput) {
   if (!input.referenceAudio) {
     throw new RemoteProviderError("Missing reference audio", {
@@ -222,8 +235,7 @@ async function generateRemote(input: GenerateVoiceInput) {
   const outputStem = sanitizeFilename(`voice_${idStamp()}`);
   const temporaryDir = await fs.mkdtemp(path.join(os.tmpdir(), "thalika-voxcpm2-"));
   let result: GenerateVoiceResult | undefined;
-  let referenceTranscriptEnabled = Boolean(input.referenceText?.trim());
-  let transcriptFallbackUsed = false;
+  const referenceTranscriptEnabled = Boolean(input.referenceText?.trim());
 
   try {
     const audioChunkPaths: string[] = [];
@@ -252,44 +264,59 @@ async function generateRemote(input: GenerateVoiceInput) {
         totalChunks: chunks.length,
         message: `Generating audio segment ${chunkIndex + 1} of ${chunks.length}.`
       });
-      const audio = await withRetry(
-        async () => {
-          let remoteAudioUrl: string;
-          try {
-            remoteAudioUrl = await callVoxCPM2(
-              baseUrl,
-              input,
-              uploadedReferencePath,
-              chunk,
-              chunkIndex,
-              chunks.length,
-              referenceTranscriptEnabled
-            );
-          } catch (error) {
-            if (!referenceTranscriptEnabled || !shouldFallbackFromTranscript(error)) throw error;
-            transcriptFallbackUsed = true;
-            referenceTranscriptEnabled = false;
-            await appendGenerationLog("transcript_mode_fallback", {
-              jobId: input.jobId,
-              chunk: chunkIndex + 1,
-              chunks: chunks.length,
-              error: diagnosticError(error)
-            });
-            remoteAudioUrl = await callVoxCPM2(baseUrl, input, uploadedReferencePath, chunk, chunkIndex, chunks.length, false);
-          }
-          return downloadRemoteAudio(remoteAudioUrl);
-        },
+      const logStageRetry = (stage: string) => async (error: unknown, attempt: number) => {
+        await appendGenerationLog("chunk_retry", {
+          jobId: input.jobId,
+          chunk: chunkIndex + 1,
+          chunks: chunks.length,
+          stage,
+          attempt,
+          error: diagnosticError(error)
+        });
+      };
+
+      // Stage 1 — enqueue inference. Always send the reference transcript (use_prompt_text=true);
+      // retrying without it makes VoxCPM echo the reference audio tail (dominant on short scripts).
+      // Only retry on 429/503 so an ambiguous timeout never re-enqueues a duplicate inference.
+      const submission = await withRetry(
+        () =>
+          submitVoxCPM2Generation(
+            baseUrl,
+            input,
+            uploadedReferencePath,
+            chunk,
+            chunkIndex,
+            chunks.length,
+            referenceTranscriptEnabled
+          ),
+        shouldRetrySubmit,
+        2,
+        logStageRetry("submit")
+      );
+
+      // Stage 2 — read the queued job's result. Retrying re-reads the SAME event id (no new
+      // inference), so a slow SSE read or transient drop is safe to retry on timeout.
+      const remoteAudioUrl = await withRetry(
+        () =>
+          fetchVoxCPM2Result(
+            baseUrl,
+            submission.eventId,
+            input,
+            chunkIndex,
+            chunks.length,
+            submission.referenceTextRequested
+          ),
         shouldRetryHFError,
         2,
-        async (error, attempt) => {
-          await appendGenerationLog("chunk_retry", {
-            jobId: input.jobId,
-            chunk: chunkIndex + 1,
-            chunks: chunks.length,
-            attempt,
-            error: diagnosticError(error)
-          });
-        }
+        logStageRetry("result")
+      );
+
+      // Stage 3 — download the produced file (idempotent GET).
+      const audio = await withRetry(
+        () => downloadRemoteAudio(remoteAudioUrl),
+        shouldRetryHFError,
+        2,
+        logStageRetry("download")
       );
       let converted;
       try {
@@ -353,7 +380,6 @@ async function generateRemote(input: GenerateVoiceInput) {
         denoiseReference: input.denoiseReference ?? false,
         normalizeText: input.normalizeText ?? true,
         referenceTranscriptUsed: Boolean(input.referenceText?.trim()),
-        transcriptFallbackUsed,
         paceGuidance: speedControl(input.speed),
         chunkedGeneration: chunks.length > 1,
         chunkCount: chunks.length,

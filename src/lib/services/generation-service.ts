@@ -50,6 +50,18 @@ export async function generateVoice(input: GenerateVoiceRequest): Promise<Genera
       referenceQualityReport: effectiveInput.referenceQualityReport || saved.profile.qualityReport
     };
   }
+  if (
+    (effectiveInput.provider === "voxcpm2" || effectiveInput.provider === "burmese_production") &&
+    !effectiveInput.referenceText?.trim()
+  ) {
+    // Server-side backstop after profile backfill: VoxCPM echoes the reference audio tail when
+    // prompt_text is empty (worst on short scripts). Block any clone — including legacy profiles
+    // saved without a transcript — that would otherwise reach inference with no prompt_text.
+    throw new RemoteProviderError("Missing reference transcript", {
+      publicMessage:
+        "Voice cloning requires the exact reference transcript. Add the transcript to this voice profile or paste the words spoken in the reference audio."
+    });
+  }
   if (effectiveInput.provider === "burmese_production" && effectiveInput.referenceQualityReport?.status === "block") {
     throw new RemoteProviderError("Blocked reference audio", {
       publicMessage: "Reference audio quality is blocked. Upload a cleaner voice sample."

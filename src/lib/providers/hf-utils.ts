@@ -224,7 +224,9 @@ export function summarizeRemoteEvents(events: unknown[]) {
 }
 
 export function extractAudioUrlFromEvents(events: unknown[], baseUrl: string) {
-  for (const event of events.reverse()) {
+  // Copy before reversing: events is reused for diagnostics (summarizeRemoteEvents) after
+  // this throws, and reverse() would otherwise mutate the caller's array in place.
+  for (const event of [...events].reverse()) {
     const candidates = collectAudioCandidates(event);
     const candidate = candidates[0];
     if (!candidate) continue;

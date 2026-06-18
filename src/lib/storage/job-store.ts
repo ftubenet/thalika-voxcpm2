@@ -94,12 +94,22 @@ export async function deleteJob(jobId: string) {
 
   let audioDeleted = false;
   if (audioFile) {
+    // Resolve the path defensively: a malformed legacy audioFile would make safeJoin throw,
+    // and that must not fail the whole delete after the job record is already gone.
+    let audioPath: string | undefined;
     try {
-      await fs.unlink(safeJoin(outputsDir, audioFile));
-      audioDeleted = true;
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-        throw error;
+      audioPath = safeJoin(outputsDir, audioFile);
+    } catch {
+      audioPath = undefined;
+    }
+    if (audioPath) {
+      try {
+        await fs.unlink(audioPath);
+        audioDeleted = true;
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+          throw error;
+        }
       }
     }
   }

@@ -59,11 +59,19 @@ export const generateRequestSchema = z
         message: "VoxCPM2 requires reference audio for voice cloning"
       });
     }
-    if (value.provider === "burmese_production" && (value.cloneMode || "high_fidelity") === "high_fidelity" && !value.referenceText?.trim() && !value.voiceProfileId) {
+    if (
+      (value.provider === "burmese_production" || value.provider === "voxcpm2") &&
+      !value.referenceText?.trim() &&
+      !value.voiceProfileId
+    ) {
+      // VoxCPM leaks the reference audio tail into the output when prompt_text is empty
+      // (worst on short scripts), regardless of clone mode. Every clone must send the exact
+      // transcript. A saved profile is exempt here only because generation-service backfills
+      // its transcript and re-checks server-side before inference.
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["referenceText"],
-        message: "Burmese high-fidelity cloning requires the exact reference transcript"
+        message: "Voice cloning requires the exact reference transcript spoken in the reference audio"
       });
     }
     if (value.provider === "burmese_production" && (!value.normalizationApproved || !value.approvedNormalizedScript || !value.lexiconRevision)) {

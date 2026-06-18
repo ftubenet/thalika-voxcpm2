@@ -354,6 +354,7 @@ export default function Home() {
     isGenerating ||
     ((provider === "voxcpm2" || provider === "burmese_production") &&
       ((!referenceAudio && !selectedProfileId) || Boolean(referenceRequirementError))) ||
+    (provider === "voxcpm2" && !referenceText.trim() && !selectedProfileId) ||
     (provider === "burmese_production" && (referenceQualityReport?.status === "block" || !referenceText.trim() || !normalizationApproved));
   const activePreflight: ProviderPreflightResult = preflightProvider({ provider, script, referenceAudio, voiceProfileId: selectedProfileId || undefined, referenceText, normalizationApproved, cloneMode });
   const capabilityDisabled = !activePreflight.ok;

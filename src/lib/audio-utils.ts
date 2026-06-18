@@ -320,7 +320,10 @@ export function encodePcm24Wav(
     const mixedSample =
       channelData.reduce((sum, channel) => sum + channel[sampleIndex], 0) /
       channelData.length;
-    const sample = Math.max(-1, Math.min(1, mixedSample));
+    // A NaN/Infinity sample (e.g. from a corrupt MP3 decode) would make writeIntLE throw
+    // RangeError and crash the whole merge. Treat non-finite samples as silence.
+    const finiteSample = Number.isFinite(mixedSample) ? mixedSample : 0;
+    const sample = Math.max(-1, Math.min(1, finiteSample));
     const integerSample =
       sample < 0
         ? Math.round(sample * 0x800000)
