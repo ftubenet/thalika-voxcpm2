@@ -49,8 +49,13 @@ function HistoryAudioPlayer({ filename }: { filename: string }) {
     if (!audio) return;
 
     if (audio.paused) {
-      await audio.play();
-      setIsPlaying(true);
+      try {
+        await audio.play();
+        setIsPlaying(true);
+      } catch {
+        // play() rejects on autoplay policy or a missing/404 file; keep the button in sync.
+        setIsPlaying(false);
+      }
     } else {
       audio.pause();
       setIsPlaying(false);

@@ -23,6 +23,7 @@ export async function saveListeningReview(input: Omit<ListeningReview, "overallS
         noise: review.noise,
         overallScore: review.overallScore,
         approval: review.approval,
+        hasNotes: Boolean(input.notes),
         updatedAt: review.updatedAt
       },
       input.notes || "Human listening QA review."
@@ -43,7 +44,15 @@ export async function readListeningReview(jobId: string): Promise<ListeningRevie
       noise: toNumber(parsed.frontmatter.noise),
       overallScore: toNumber(parsed.frontmatter.overallScore),
       approval: parsed.frontmatter.approval === "approved" ? "approved" : "review_needed",
-      notes: parsed.body === "Human listening QA review." ? "" : parsed.body,
+      // New records carry hasNotes; for older records fall back to the placeholder check.
+      notes:
+        "hasNotes" in parsed.frontmatter
+          ? parsed.frontmatter.hasNotes === "true"
+            ? parsed.body
+            : ""
+          : parsed.body === "Human listening QA review."
+            ? ""
+            : parsed.body,
       updatedAt: parsed.frontmatter.updatedAt || ""
     };
   } catch (error) {
