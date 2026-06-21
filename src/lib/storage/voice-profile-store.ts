@@ -54,7 +54,7 @@ export async function createVoiceProfile(input: {
     referenceText: input.referenceText.trim(),
     qualityReport: input.qualityReport,
     preferredCloneMode: input.preferredCloneMode || "high_fidelity",
-    preferredCloneStrength: input.preferredCloneStrength ?? 2.8,
+    preferredCloneStrength: input.preferredCloneStrength ?? 2,
     preferredDenoiseReference: input.preferredDenoiseReference ?? false,
     preferredNormalizeText: input.preferredNormalizeText ?? true,
     createdAt

@@ -42,7 +42,9 @@ export default function Home() {
   const [speed, setSpeed] = useState(1);
   const [emotion, setEmotion] = useState<VoiceEmotion>("calm");
   const [cloneMode, setCloneMode] = useState<CloneMode>("high_fidelity");
-  const [cloneStrength, setCloneStrength] = useState(2.8);
+  // VoxCPM2's cfg_value sweet spot is ~2.0; higher over-adheres to the prompt and sounds more
+  // robotic/over-articulated. Default to the model-recommended value; the slider still goes to 3.0.
+  const [cloneStrength, setCloneStrength] = useState(2.0);
   const [denoiseReference, setDenoiseReference] = useState(false);
   const [normalizeText, setNormalizeText] = useState(true);
   const [status, setStatus] = useState<StudioStatus>("idle");

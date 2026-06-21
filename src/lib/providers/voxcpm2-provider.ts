@@ -88,7 +88,9 @@ async function submitVoxCPM2Generation(
   useReferenceTranscript: boolean
 ) {
   const cloneMode = input.cloneMode || "high_fidelity";
-  const cloneStrength = Math.min(3, Math.max(1, input.cloneStrength ?? (cloneMode === "high_fidelity" ? 2.8 : 2.2)));
+  // cfg_value: VoxCPM2's documented sweet spot is ~2.0. Higher improves prompt adherence but
+  // reduces naturalness (more robotic), so keep defaults near 2.0 — the slider can still override.
+  const cloneStrength = Math.min(3, Math.max(1, input.cloneStrength ?? (cloneMode === "high_fidelity" ? 2 : 1.7)));
   const denoiseReference = input.denoiseReference ?? false;
   const normalizeText = input.normalizeText ?? true;
   const referenceText = useReferenceTranscript ? input.referenceText?.trim() || "" : "";
@@ -376,7 +378,7 @@ async function generateRemote(input: GenerateVoiceInput) {
         pausePolicy: "punctuation-aware",
         mode: "voxcpm2-controllable-cloning",
         cloneMode: input.cloneMode || "high_fidelity",
-        cloneStrength: input.cloneStrength ?? 2.8,
+        cloneStrength: input.cloneStrength ?? 2,
         denoiseReference: input.denoiseReference ?? false,
         normalizeText: input.normalizeText ?? true,
         referenceTranscriptUsed: Boolean(input.referenceText?.trim()),
