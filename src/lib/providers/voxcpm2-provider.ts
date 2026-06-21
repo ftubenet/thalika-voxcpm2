@@ -4,7 +4,8 @@ import path from "node:path";
 import {
   convertRemoteAudioToPcm24Wav,
   getPunctuationAwarePauseMilliseconds,
-  mergeWavFiles
+  mergeWavFiles,
+  normalizeMasterPeak
 } from "../audio-utils";
 import { ensureDataDirs, idStamp, outputsDir, safeJoin, sanitizeFilename } from "../file-utils";
 import { REMOTE_TTS_CHUNK_CHARACTERS } from "../script-limits";
@@ -43,6 +44,20 @@ function speedControl(speed: number) {
   if (speed >= 1.15) return "brisk pacing";
   if (speed >= 1.05) return "slightly faster pacing";
   return "natural pacing";
+}
+
+// Optional escape hatch for a self-hosted VoxCPM2 Space whose /generate exposes extra controls.
+// Set VOXCPM2_EXTRA_PARAMS to a JSON array appended to the Gradio data[] in the order your Space
+// expects (e.g. [20, true] for inference_timesteps + retry_badcase). Unset keeps the demo payload.
+function parseExtraGenerateParams(): unknown[] {
+  const raw = process.env.VOXCPM2_EXTRA_PARAMS?.trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function decodeReferenceAudio(referenceAudio: ReferenceAudioPayload) {
@@ -102,22 +117,26 @@ async function submitVoxCPM2Generation(
     cloneMode === "high_fidelity"
       ? `Preserve the uploaded speaker identity as closely as possible: timbre, accent, pitch range, rhythm, breath, tone, speaking style, and Burmese pronunciation. Use ${emotionControls[input.emotion]} with ${speedControl(input.speed)}.${continuityInstruction}`
       : `Clone the uploaded speaker while keeping natural speech. Use ${emotionControls[input.emotion]} with ${speedControl(input.speed)}.${continuityInstruction}`;
+  const data: unknown[] = [
+    scriptChunk,
+    controlInstruction,
+    {
+      path: uploadedReferencePath,
+      orig_name: sanitizeFilename(input.referenceAudio?.filename || "reference.wav"),
+      mime_type: input.referenceAudio?.mimeType || "audio/wav",
+      meta: { _type: "gradio.FileData" }
+    },
+    Boolean(referenceText),
+    referenceText,
+    cloneStrength,
+    normalizeText,
+    denoiseReference,
+    // Config-only Path B hook: a self-hosted Space whose /generate exposes extra controls
+    // (inference_timesteps, retry_badcase, …) receives them here without a code change.
+    ...parseExtraGenerateParams()
+  ];
   const body = {
-    data: [
-      scriptChunk,
-      controlInstruction,
-      {
-        path: uploadedReferencePath,
-        orig_name: sanitizeFilename(input.referenceAudio?.filename || "reference.wav"),
-        mime_type: input.referenceAudio?.mimeType || "audio/wav",
-        meta: { _type: "gradio.FileData" }
-      },
-      Boolean(referenceText),
-      referenceText,
-      cloneStrength,
-      normalizeText,
-      denoiseReference
-    ]
+    data
   };
 
   const response = await fetchWithTimeout(`${baseUrl}/gradio_api/call/generate`, {
@@ -361,6 +380,9 @@ async function generateRemote(input: GenerateVoiceInput) {
       pausesMilliseconds: punctuationAwarePauses.join(",")
     });
     await mergeWavFiles(audioChunkPaths, audioFilePath, punctuationAwarePauses);
+    // Master the merged take: peak-normalize to a consistent level and fade the edges. Only new
+    // generations are mastered — legacy-file migration must not re-level existing user audio.
+    await normalizeMasterPeak(audioFilePath);
     await appendGenerationLog("generation_completed", { jobId: input.jobId, chunks: chunks.length, filename, format });
     result = {
       filename,

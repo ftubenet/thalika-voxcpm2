@@ -395,6 +395,63 @@ export function getPunctuationAwarePauseMilliseconds(scriptChunk: string) {
   return 120;
 }
 
+const INT24_MAX = 0x7fffff;
+const INT24_MIN = -0x800000;
+// Master to -1 dBFS so output level is consistent and "produced" without inter-sample clipping.
+const MASTER_PEAK_TARGET_DBFS = -1;
+// Short edge fades remove the start/end click of a hard PCM cut.
+const MASTER_FADE_MILLISECONDS = 4;
+// Cap the lift so a quiet/near-silent take is not amplified into its own noise floor.
+const MASTER_MAX_GAIN = 6;
+// Skip very long files to keep this in-memory pass bounded (~25 min at the master format).
+const MASTER_MAX_DATA_BYTES = 256 * 1024 * 1024;
+
+// Peak-normalize a finished 24-bit master in place and apply tiny edge fades. Both operations are
+// purely multiplicative, so inserted silence stays silent and no sample can exceed the target.
+export async function normalizeMasterPeak(filePath: string) {
+  const wav = await parsePcmWavFile(filePath);
+  const bytesPerSample = wav.bitsPerSample / 8;
+  if (bytesPerSample !== 3 || wav.dataSize === 0 || wav.dataSize > MASTER_MAX_DATA_BYTES) return;
+
+  const handle = await fs.open(filePath, "r+");
+  try {
+    const data = Buffer.alloc(wav.dataSize);
+    const { bytesRead } = await handle.read(data, 0, wav.dataSize, wav.dataStart);
+    if (bytesRead !== wav.dataSize) return;
+
+    const sampleCount = Math.floor(wav.dataSize / bytesPerSample);
+    if (sampleCount === 0) return;
+
+    let peak = 0;
+    for (let i = 0; i < sampleCount; i += 1) {
+      const magnitude = Math.abs(data.readIntLE(i * bytesPerSample, bytesPerSample));
+      if (magnitude > peak) peak = magnitude;
+    }
+    if (peak === 0) return;
+
+    const targetInt = Math.pow(10, MASTER_PEAK_TARGET_DBFS / 20) * INT24_MAX;
+    const gain = Math.min(MASTER_MAX_GAIN, targetInt / peak);
+    const fadeSamples = Math.min(
+      Math.floor(sampleCount / 2),
+      Math.round((wav.sampleRate * MASTER_FADE_MILLISECONDS) / 1000)
+    );
+
+    for (let i = 0; i < sampleCount; i += 1) {
+      let value = data.readIntLE(i * bytesPerSample, bytesPerSample) * gain;
+      if (fadeSamples > 0) {
+        if (i < fadeSamples) value *= (i + 1) / fadeSamples;
+        else if (i >= sampleCount - fadeSamples) value *= (sampleCount - i) / fadeSamples;
+      }
+      const clamped = Math.max(INT24_MIN, Math.min(INT24_MAX, Math.round(value)));
+      data.writeIntLE(clamped, i * bytesPerSample, bytesPerSample);
+    }
+
+    await handle.write(data, 0, wav.dataSize, wav.dataStart);
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function validatePcm24MasterFile(filePath: string) {
   const wav = await parsePcmWavFile(filePath);
 
