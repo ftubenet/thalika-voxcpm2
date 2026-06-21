@@ -199,6 +199,11 @@ function shouldRetrySubmit(error: unknown) {
   return error instanceof RemoteProviderError && error.retryable;
 }
 
+// The public Space rejects bursts of submissions with 503 under load; retry patiently (with
+// capped backoff) so a transient busy window doesn't surface as a hard generation failure.
+// Safe because a rejected submission never enqueued inference — no duplicate-run risk.
+const SUBMIT_RETRY_ATTEMPTS = 5;
+
 async function downloadRemoteAudio(audioUrl: string) {
   const response = await fetchWithTimeout(audioUrl, { method: "GET" });
   assertOkResponse(response, "VoxCPM2 audio download failed");
@@ -318,7 +323,7 @@ async function generateRemote(input: GenerateVoiceInput) {
             referenceTranscriptEnabled
           ),
         shouldRetrySubmit,
-        2,
+        SUBMIT_RETRY_ATTEMPTS,
         logStageRetry("submit")
       );
 

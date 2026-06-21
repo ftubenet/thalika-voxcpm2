@@ -72,7 +72,9 @@ export async function fetchTextWithTimeout(url: string, init: RequestInit = {}, 
 }
 
 function retryDelay(attempt: number) {
-  return 600 * 2 ** attempt;
+  // Exponential backoff capped at 15s so a long retry budget (e.g. riding out a busy public
+  // Space's 503s) spaces requests out politely without growing unbounded.
+  return Math.min(15_000, 600 * 2 ** attempt);
 }
 
 function sleep(ms: number) {
@@ -123,7 +125,7 @@ export function assertOkResponse(response: Response, fallbackMessage: string) {
   if (response.status === 503) {
     throw new RemoteProviderError("Unavailable", {
       statusCode: response.status,
-      publicMessage: "Hugging Face Space is currently unavailable.",
+      publicMessage: "The public VoxCPM2 Space is busy or waking up. Wait a moment and generate again.",
       retryable: true
     });
   }
