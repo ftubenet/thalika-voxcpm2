@@ -8,7 +8,7 @@ import { createJobId, saveJob } from "@/lib/storage/job-store";
 import { readBurmeseLexicon } from "@/lib/storage/burmese-lexicon-store";
 import { saveScript } from "@/lib/storage/script-store";
 import { getVoiceProfile } from "@/lib/storage/voice-profile-store";
-import type { GenerateVoiceRequest, GenerateVoiceResult, ProviderPreflightResult } from "@/lib/types";
+import type { GenerateVoiceRequest, GenerateVoiceResult, JobRecord, ProviderPreflightResult } from "@/lib/types";
 
 export class ProviderPreflightError extends Error {
   constructor(public preflight: ProviderPreflightResult) {
@@ -17,16 +17,13 @@ export class ProviderPreflightError extends Error {
   }
 }
 
-export interface GenerationSuccess {
+export interface GenerationStarted {
   jobId: string;
   scriptId: string;
-  status: "completed";
-  audioUrl: string;
-  filename: string;
+  status: "generating";
   provider: GenerateVoiceRequest["provider"];
   format: GenerateVoiceRequest["format"];
   createdAt: string;
-  metadata?: Record<string, string | number | boolean>;
 }
 
 function providerErrorMessage(error: unknown) {
@@ -40,7 +37,57 @@ function formatJobContent(providerName: string, audio: GenerateVoiceResult) {
   return `Generated voice metadata.\n\nProvider: ${providerName}\nFormat: ${audio.format}\nAudio file: ${audio.filename}${metadata}`;
 }
 
-export async function generateVoice(input: GenerateVoiceRequest): Promise<GenerationSuccess> {
+// The job fields shared across every save for one generation; status/content are added per save.
+type BaseJob = Omit<JobRecord, "status" | "content" | "createdAt"> & { createdAt: string };
+
+type GenerationContext = {
+  baseJob: BaseJob;
+  effectiveInput: GenerateVoiceRequest;
+  scriptId: string;
+  title: string;
+};
+
+// Runs the long multi-chunk generation in the background after the request has returned the
+// jobId. Progress is written to the job record (polled by the client); it never throws — any
+// failure is recorded on the job so a long script can't surface as a dropped HTTP request.
+async function runGeneration({ baseJob, effectiveInput, scriptId, title }: GenerationContext) {
+  try {
+    const provider = getProvider(effectiveInput.provider);
+    const audio = await provider.generate({
+      ...effectiveInput,
+      jobId: baseJob.id,
+      scriptId,
+      title,
+      onProgress: async (progress) => {
+        await saveJob({
+          ...baseJob,
+          status: "generating",
+          ...progress,
+          progressMessage: progress.message,
+          content: progress.message
+        });
+      }
+    });
+
+    await saveJob({
+      ...baseJob,
+      format: audio.format,
+      status: "completed",
+      audioFile: audio.filename,
+      rawAudioFile: audio.rawAudioFile,
+      content: formatJobContent(provider.name, audio)
+    });
+  } catch (error) {
+    await saveJob({
+      ...baseJob,
+      status: "failed",
+      error: providerErrorMessage(error),
+      content: "Generation failed before audio output was created."
+    }).catch(() => undefined);
+  }
+}
+
+export async function startVoiceGeneration(input: GenerateVoiceRequest): Promise<GenerationStarted> {
   let effectiveInput = { ...input };
   if (input.voiceProfileId) {
     const saved = await getVoiceProfile(input.voiceProfileId);
@@ -121,57 +168,22 @@ export async function generateVoice(input: GenerateVoiceRequest): Promise<Genera
     content: "Generation is in progress."
   });
 
-  try {
-    const provider = getProvider(effectiveInput.provider);
-    const audio = await provider.generate({
-      ...effectiveInput,
-      jobId,
-      scriptId: scriptRecord.id,
-      title: scriptRecord.title,
-      onProgress: async (progress) => {
-        await saveJob({
-          ...baseJob,
-          status: "generating",
-          ...progress,
-          progressMessage: progress.message,
-          content: progress.message
-        });
-      }
-    });
+  // Fire-and-forget: the job record is the source of truth from here. The client polls it for
+  // live progress and the final result, so a long multi-chunk generation no longer depends on a
+  // single long-lived HTTP request staying open.
+  void runGeneration({
+    baseJob,
+    effectiveInput,
+    scriptId: scriptRecord.id,
+    title: scriptRecord.title
+  }).catch(() => undefined);
 
-    const job = await saveJob({
-      ...baseJob,
-      format: audio.format,
-      status: "completed",
-      audioFile: audio.filename,
-      rawAudioFile: audio.rawAudioFile,
-      createdAt,
-      content: formatJobContent(provider.name, audio)
-    });
-
-    return {
-      jobId: job.id,
-      scriptId: scriptRecord.id,
-      status: "completed",
-      audioUrl: audio.localAudioUrl || `/api/audio/${audio.filename}`,
-      filename: audio.filename,
-      provider: effectiveInput.provider,
-      format: audio.format,
-      createdAt: job.createdAt,
-      metadata: audio.metadata
-    };
-  } catch (error) {
-    const specificMessage = providerErrorMessage(error);
-    await saveJob({
-      ...baseJob,
-      status: "failed",
-      error: specificMessage,
-      createdAt,
-      content: "Generation failed before audio output was created."
-    });
-
-    throw new RemoteProviderError("Voice generation failed", {
-      publicMessage: specificMessage
-    });
-  }
+  return {
+    jobId,
+    scriptId: scriptRecord.id,
+    status: "generating",
+    provider: effectiveInput.provider,
+    format: effectiveInput.format,
+    createdAt
+  };
 }

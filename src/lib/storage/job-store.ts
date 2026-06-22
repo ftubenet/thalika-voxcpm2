@@ -44,35 +44,49 @@ export async function saveJob(record: Omit<JobRecord, "createdAt"> & { createdAt
   return job;
 }
 
+function jobFromMarkdown(content: string, fallbackId = ""): JobRecord {
+  const parsed = parseMarkdown(content);
+  return {
+    id: parsed.frontmatter.id || fallbackId,
+    scriptId: parsed.frontmatter.scriptId || "",
+    title: parsed.frontmatter.title || "Untitled Script",
+    provider: parsed.frontmatter.provider || "unknown",
+    format: (parsed.frontmatter.format || "wav") as OutputFormat,
+    speed: toNumber(parsed.frontmatter.speed, 1),
+    emotion: (parsed.frontmatter.emotion || "neutral") as VoiceEmotion,
+    status: parsed.frontmatter.status === "failed" ? "failed" : parsed.frontmatter.status === "generating" ? "generating" : "completed",
+    audioFile: parsed.frontmatter.audioFile,
+    rawAudioFile: parsed.frontmatter.rawAudioFile,
+    error: parsed.frontmatter.error,
+    completedChunks: toNumber(parsed.frontmatter.completedChunks, 0),
+    totalChunks: toNumber(parsed.frontmatter.totalChunks, 0),
+    progressMessage: parsed.frontmatter.progressMessage,
+    voiceProfileId: parsed.frontmatter.voiceProfileId,
+    lexiconRevision: parsed.frontmatter.lexiconRevision,
+    normalizationChanges: toNumber(parsed.frontmatter.normalizationChanges, 0),
+    referenceQualityScore: toNumber(parsed.frontmatter.referenceQualityScore, 0),
+    referenceTranscriptUsed: parsed.frontmatter.referenceTranscriptUsed === "true",
+    createdAt: parsed.frontmatter.createdAt || "",
+    content: parsed.body
+  } satisfies JobRecord;
+}
+
+export async function getJob(jobId: string): Promise<JobRecord | undefined> {
+  if (!/^job_[a-zA-Z0-9_-]+$/.test(jobId)) return undefined;
+  try {
+    const content = await fs.readFile(safeJoin(jobsDir, `${jobId}.md`), "utf8");
+    const job = jobFromMarkdown(content, jobId);
+    return { ...job, review: await readListeningReview(job.id) };
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
 export async function listJobs(limit = 20) {
   const files = await readMarkdownFiles(jobsDir);
   const jobs = files
-    .map(({ content }) => {
-      const parsed = parseMarkdown(content);
-      return {
-        id: parsed.frontmatter.id || "",
-        scriptId: parsed.frontmatter.scriptId || "",
-        title: parsed.frontmatter.title || "Untitled Script",
-        provider: parsed.frontmatter.provider || "unknown",
-        format: (parsed.frontmatter.format || "wav") as OutputFormat,
-        speed: toNumber(parsed.frontmatter.speed, 1),
-        emotion: (parsed.frontmatter.emotion || "neutral") as VoiceEmotion,
-        status: parsed.frontmatter.status === "failed" ? "failed" : parsed.frontmatter.status === "generating" ? "generating" : "completed",
-        audioFile: parsed.frontmatter.audioFile,
-        rawAudioFile: parsed.frontmatter.rawAudioFile,
-        error: parsed.frontmatter.error,
-        completedChunks: toNumber(parsed.frontmatter.completedChunks, 0),
-        totalChunks: toNumber(parsed.frontmatter.totalChunks, 0),
-        progressMessage: parsed.frontmatter.progressMessage,
-        voiceProfileId: parsed.frontmatter.voiceProfileId,
-        lexiconRevision: parsed.frontmatter.lexiconRevision,
-        normalizationChanges: toNumber(parsed.frontmatter.normalizationChanges, 0),
-        referenceQualityScore: toNumber(parsed.frontmatter.referenceQualityScore, 0),
-        referenceTranscriptUsed: parsed.frontmatter.referenceTranscriptUsed === "true",
-        createdAt: parsed.frontmatter.createdAt || "",
-        content: parsed.body
-      } satisfies JobRecord;
-    })
+    .map(({ content }) => jobFromMarkdown(content))
     .filter((job) => job.id)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, limit);

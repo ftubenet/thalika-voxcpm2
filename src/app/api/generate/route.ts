@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { formatValidationError, generateRequestSchema } from "@/lib/validators";
 import { RemoteProviderError } from "@/lib/providers/hf-utils";
-import { generateVoice, ProviderPreflightError } from "@/lib/services/generation-service";
+import { startVoiceGeneration, ProviderPreflightError } from "@/lib/services/generation-service";
 
 export const runtime = "nodejs";
 
@@ -20,7 +20,9 @@ export async function POST(request: Request) {
   }
 
   try {
-    return NextResponse.json(await generateVoice(parsed.data));
+    // Returns immediately with the jobId; generation runs in the background and the client
+    // polls GET /api/history/[jobId] for live progress and the final audio.
+    return NextResponse.json(await startVoiceGeneration(parsed.data), { status: 202 });
   } catch (error) {
     if (error instanceof ProviderPreflightError) {
       return NextResponse.json(

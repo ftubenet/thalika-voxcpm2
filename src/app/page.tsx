@@ -50,6 +50,7 @@ export default function Home() {
   const [normalizeText, setNormalizeText] = useState(true);
   const [status, setStatus] = useState<StudioStatus>("idle");
   const [error, setError] = useState("");
+  const [progress, setProgress] = useState<{ completed: number; total: number; message: string } | undefined>();
   const [audioResult, setAudioResult] = useState<AudioResult | undefined>();
   const [referenceAudio, setReferenceAudio] = useState<ReferenceAudioPayload | undefined>();
   const [referenceAudioError, setReferenceAudioError] = useState("");
@@ -285,9 +286,9 @@ export default function Home() {
     setStatus("saving");
     setError("");
     setAudioResult(undefined);
+    setProgress(undefined);
 
     try {
-      setStatus("generating");
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -313,20 +314,64 @@ export default function Home() {
       });
       const data = await response.json();
 
-      if (!response.ok || data.status === "failed") {
+      if (!response.ok || data.status === "failed" || !data.jobId) {
         throw new Error(data.message || data.error || "Generation failed");
       }
 
-      setAudioResult({
-        audioUrl: data.audioUrl,
-        filename: data.filename,
-        provider: data.provider,
-        createdAt: data.createdAt
-      });
-      setStatus("completed");
+      // Generation runs in the background; poll the job for live progress and the final audio so a
+      // long, multi-chunk script isn't tied to one long-lived request.
+      setStatus("generating");
+      const jobId: string = data.jobId;
+      const deadline = Date.now() + 40 * 60 * 1000;
+
+      for (;;) {
+        if (Date.now() > deadline) {
+          throw new Error("Generation is taking unusually long. Check the History tab for this job.");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1300));
+
+        let job: {
+          status?: string;
+          completedChunks?: number;
+          totalChunks?: number;
+          progressMessage?: string;
+          audioUrl?: string;
+          audioFile?: string;
+          provider?: string;
+          createdAt?: string;
+          error?: string;
+        };
+        try {
+          const poll = await fetch(`/api/history/${jobId}`, { cache: "no-store" });
+          if (!poll.ok) continue;
+          job = await poll.json();
+        } catch {
+          continue; // transient network hiccup — keep polling
+        }
+
+        if (typeof job.totalChunks === "number" && job.totalChunks > 0) {
+          setProgress({ completed: job.completedChunks ?? 0, total: job.totalChunks, message: job.progressMessage ?? "" });
+        }
+
+        if (job.status === "completed" && job.audioUrl) {
+          setAudioResult({
+            audioUrl: job.audioUrl,
+            filename: job.audioFile || "",
+            provider: job.provider || provider,
+            createdAt: job.createdAt || ""
+          });
+          setStatus("completed");
+          setProgress(undefined);
+          return;
+        }
+        if (job.status === "failed") {
+          throw new Error(job.error || "Generation failed");
+        }
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Generation failed");
       setStatus("failed");
+      setProgress(undefined);
     }
   }
 
@@ -443,7 +488,7 @@ export default function Home() {
               disabledReason={disabledReason}
               onClick={generateAudio}
             />
-            <StatusPanel status={status} error={error} />
+            <StatusPanel status={status} error={error} completedChunks={progress?.completed} totalChunks={progress?.total} progressMessage={progress?.message} />
             <AudioPreview result={audioResult} />
           </aside>
         </div>
