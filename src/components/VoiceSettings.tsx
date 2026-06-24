@@ -101,6 +101,7 @@ export function VoiceSettings({
   const [lexiconError, setLexiconError] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [endpointSaving, setEndpointSaving] = useState(false);
+  const [endpointNote, setEndpointNote] = useState("");
 
   useEffect(() => {
     void fetch("/api/settings/voxcpm2-endpoint", { cache: "no-store" })
@@ -120,6 +121,27 @@ export function VoiceSettings({
       const data = await response.json();
       if (data.baseUrl) setEndpoint(data.baseUrl);
       onRefreshProviderHealth?.();
+    } finally {
+      setEndpointSaving(false);
+    }
+  }
+
+  async function startLocal() {
+    setEndpointSaving(true);
+    setEndpointNote("");
+    try {
+      const response = await fetch("/api/voxcpm-local/start", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) {
+        setEndpointNote(data.error || "Could not start local VoxCPM.");
+        return;
+      }
+      setEndpoint("http://localhost:7860");
+      setEndpointNote(
+        data.alreadyRunning
+          ? "Local VoxCPM is already up — click Save & check."
+          : "Starting locally. First run downloads the model (minutes). Click Save & check when it's ready."
+      );
     } finally {
       setEndpointSaving(false);
     }
@@ -221,10 +243,12 @@ export function VoiceSettings({
               <div className="flex flex-wrap items-center gap-2">
                 <button type="button" onClick={() => setEndpoint("https://openbmb-voxcpm-demo.hf.space")} className="studio-soft-chip-bg rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-studio-text">HF Space</button>
                 <button type="button" onClick={() => setEndpoint("http://localhost:7860")} className="studio-soft-chip-bg rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-studio-text">Local</button>
+                <button type="button" disabled={endpointSaving} onClick={() => void startLocal()} className="studio-soft-chip-bg rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-studio-text">Start local</button>
                 <button type="button" disabled={endpointSaving || !endpoint.trim()} onClick={() => void saveEndpoint(endpoint)} className="rounded-full bg-studio-accent px-3 py-1 text-xs font-semibold text-white disabled:opacity-45">
                   {endpointSaving ? "Saving..." : "Save & check"}
                 </button>
               </div>
+              {endpointNote && <p className="text-xs leading-5 text-studio-muted">{endpointNote}</p>}
             </div>
 
             <label className="grid gap-2 text-sm font-medium text-studio-muted">
