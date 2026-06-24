@@ -99,6 +99,31 @@ export function VoiceSettings({
   const [lexiconOpen, setLexiconOpen] = useState(false);
   const [lexiconEntries, setLexiconEntries] = useState<BurmeseLexiconEntry[]>([]);
   const [lexiconError, setLexiconError] = useState("");
+  const [endpoint, setEndpoint] = useState("");
+  const [endpointSaving, setEndpointSaving] = useState(false);
+
+  useEffect(() => {
+    void fetch("/api/settings/voxcpm2-endpoint", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => setEndpoint(data.baseUrl || ""))
+      .catch(() => undefined);
+  }, []);
+
+  async function saveEndpoint(url: string) {
+    setEndpointSaving(true);
+    try {
+      const response = await fetch("/api/settings/voxcpm2-endpoint", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ baseUrl: url })
+      });
+      const data = await response.json();
+      if (data.baseUrl) setEndpoint(data.baseUrl);
+      onRefreshProviderHealth?.();
+    } finally {
+      setEndpointSaving(false);
+    }
+  }
 
   useEffect(() => {
     if (!lexiconOpen) return;
@@ -157,7 +182,7 @@ export function VoiceSettings({
             <div className="studio-control-bg grid gap-2 rounded-2xl border border-white/10 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="inline-flex items-center gap-2 text-sm font-semibold text-studio-text">
-                  <Server size={15} /> HF backend
+                  <Server size={15} /> VoxCPM endpoint
                 </span>
                 <div className="flex items-center gap-2">
                   <span
@@ -182,11 +207,24 @@ export function VoiceSettings({
                 </div>
               </div>
               <p className="text-xs leading-relaxed text-studio-muted">
-                {providerHealth?.message || "Checks the public Hugging Face Space before remote generation."}
+                {providerHealth?.message || "Checks the selected VoxCPM endpoint before remote generation."}
                 {providerHealth?.latencyMs !== undefined && providerHealth.latencyMs > 0
                   ? ` ${providerHealth.latencyMs}ms.`
                   : ""}
               </p>
+              <input
+                value={endpoint}
+                onChange={(event) => setEndpoint(event.target.value)}
+                placeholder="https://...hf.space or http://localhost:7860"
+                className="rounded-xl border border-studio-border bg-white/60 px-3 py-2 text-xs text-studio-text outline-none"
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" onClick={() => setEndpoint("https://openbmb-voxcpm-demo.hf.space")} className="studio-soft-chip-bg rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-studio-text">HF Space</button>
+                <button type="button" onClick={() => setEndpoint("http://localhost:7860")} className="studio-soft-chip-bg rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-studio-text">Local</button>
+                <button type="button" disabled={endpointSaving || !endpoint.trim()} onClick={() => void saveEndpoint(endpoint)} className="rounded-full bg-studio-accent px-3 py-1 text-xs font-semibold text-white disabled:opacity-45">
+                  {endpointSaving ? "Saving..." : "Save & check"}
+                </button>
+              </div>
             </div>
 
             <label className="grid gap-2 text-sm font-medium text-studio-muted">

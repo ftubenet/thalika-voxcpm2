@@ -1,3 +1,4 @@
+import { readEnvKey } from "../storage/env-store";
 import { fetchWithTimeout, getHFRequestTimeout, readJsonResponse, TimeoutError } from "./hf-utils";
 
 export type VoxCPM2HealthStatus = "connected" | "timeout" | "rate_limited" | "unavailable" | "invalid_response";
@@ -17,8 +18,10 @@ export interface VoxCPM2Health {
 
 const defaultVoxCPM2SpaceUrl = "https://openbmb-voxcpm-demo.hf.space";
 
-export function getVoxCPM2BaseUrl() {
-  return (process.env.HF_VOXCPM2_URL || defaultVoxCPM2SpaceUrl).replace(/\/+$/, "");
+// Precedence: user setting (.env.local, set in-app) > env > default Space.
+export async function getVoxCPM2BaseUrl() {
+  const stored = await readEnvKey("HF_VOXCPM2_URL");
+  return (stored || process.env.HF_VOXCPM2_URL || defaultVoxCPM2SpaceUrl).replace(/\/+$/, "");
 }
 
 function makeHealth(
@@ -113,7 +116,7 @@ async function probeJson(baseUrl: string, endpoint: string) {
 }
 
 export async function checkVoxCPM2Health(): Promise<VoxCPM2Health> {
-  const baseUrl = getVoxCPM2BaseUrl();
+  const baseUrl = await getVoxCPM2BaseUrl();
 
   try {
     const info = await probeJson(baseUrl, "/gradio_api/info");

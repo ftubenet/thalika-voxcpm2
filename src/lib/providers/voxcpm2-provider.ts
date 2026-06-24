@@ -264,7 +264,7 @@ async function generateRemote(input: GenerateVoiceInput) {
   const referenceAudio = input.referenceAudio;
 
   await ensureDataDirs();
-  const baseUrl = getVoxCPM2BaseUrl();
+  const baseUrl = await getVoxCPM2BaseUrl();
   const chunks = splitScriptIntoChunks(input.script, REMOTE_TTS_CHUNK_CHARACTERS);
   if (chunks.length === 0) {
     throw new RemoteProviderError("Empty script", {
