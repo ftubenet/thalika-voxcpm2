@@ -17,6 +17,7 @@ The ~2B model is downloaded on first run and cached locally.
 
 import os
 import sys
+import tempfile
 
 import gradio as gr
 import numpy as np
@@ -58,7 +59,7 @@ def generate(text, control, audio, use_prompt_text, prompt_text, cfg_value, norm
             sample_rate, samples = audio  # (int, ndarray)
         except (TypeError, ValueError) as exc:
             raise gr.Error("Reference audio could not be read.") from exc
-        ref_path = "/tmp/thalika_reference.wav"
+        ref_path = os.path.join(tempfile.gettempdir(), "thalika_reference.wav")
         sf.write(ref_path, np.asarray(samples), int(sample_rate))
 
     cfg = float(cfg_value) if cfg_value is not None else 2.0
@@ -73,7 +74,8 @@ def generate(text, control, audio, use_prompt_text, prompt_text, cfg_value, norm
 
     # Write a 16-bit PCM WAV at the model's real rate (VoxCPM2 = 48kHz). The app requires 48kHz
     # PCM WAV (src/lib/audio-utils.ts) — returning the wrong rate/format breaks its decoder.
-    out_path = "/tmp/thalika_output.wav"
+    # Must live in the system temp dir (or cwd) or Gradio 6 refuses to serve it. /tmp is NOT it on macOS.
+    out_path = os.path.join(tempfile.gettempdir(), "thalika_output.wav")
     sf.write(out_path, np.asarray(wav, dtype=np.float32), model.tts_model.sample_rate, subtype="PCM_16")
     return out_path
 
@@ -92,9 +94,9 @@ demo = gr.Interface(
     ],
     outputs=gr.Audio(label="output"),
     api_name="generate",
-    allow_flagging="never",
+    flagging_mode="never",  # Gradio 6 renamed allow_flagging -> flagging_mode
 )
 
 if __name__ == "__main__":
     port = int(os.environ.get("VOXCPM_PORT", "7860"))
-    demo.launch(server_name="0.0.0.0", server_port=port, show_api=True)
+    demo.launch(server_name="0.0.0.0", server_port=port)
