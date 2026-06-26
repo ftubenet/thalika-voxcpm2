@@ -35,6 +35,7 @@ export const generateRequestSchema = z
     emotion: z.enum(["neutral", "calm", "energetic", "dramatic"]),
     cloneMode: z.enum(["balanced", "high_fidelity"]).optional(),
     cloneStrength: z.number().min(1, "Clone strength must be at least 1.0").max(3, "Clone strength must be at most 3.0").optional(),
+    inferenceTimesteps: z.number().int().min(4, "Timesteps must be at least 4").max(50, "Timesteps must be at most 50").optional(),
     denoiseReference: z.boolean().optional(),
     normalizeText: z.boolean().optional(),
     referenceAudio: referenceAudioSchema.optional(),

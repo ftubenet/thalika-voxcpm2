@@ -26,6 +26,7 @@ interface VoiceSettingsProps {
   emotion: VoiceEmotion;
   cloneMode: CloneMode;
   cloneStrength: number;
+  inferenceTimesteps: number;
   denoiseReference: boolean;
   normalizeText: boolean;
   referenceAudio?: ReferenceAudioPayload;
@@ -40,6 +41,7 @@ interface VoiceSettingsProps {
   onEmotionChange: (value: VoiceEmotion) => void;
   onCloneModeChange: (value: CloneMode) => void;
   onCloneStrengthChange: (value: number) => void;
+  onInferenceTimestepsChange: (value: number) => void;
   onDenoiseReferenceChange: (value: boolean) => void;
   onNormalizeTextChange: (value: boolean) => void;
   onReferenceAudioChange: (file: File | null) => void;
@@ -87,6 +89,8 @@ export function VoiceSettings({
   onEmotionChange,
   onCloneModeChange,
   onCloneStrengthChange,
+  inferenceTimesteps,
+  onInferenceTimestepsChange,
   onDenoiseReferenceChange,
   onNormalizeTextChange,
   onReferenceAudioChange,
@@ -392,6 +396,22 @@ export function VoiceSettings({
                   onChange={(event) => onCloneStrengthChange(Number(event.target.value))}
                   className="accent-studio-accent"
                 />
+              </label>
+
+              <label className="grid gap-3 text-sm font-medium text-studio-muted">
+                <span className="flex justify-between">
+                  Quality steps <span className="text-studio-text">{inferenceTimesteps}</span>
+                </span>
+                <input
+                  type="range"
+                  min="4"
+                  max="50"
+                  step="1"
+                  value={inferenceTimesteps}
+                  onChange={(event) => onInferenceTimestepsChange(Number(event.target.value))}
+                  className="accent-studio-accent"
+                />
+                <span className="text-xs font-normal text-studio-muted">Higher = better quality, slower. Local server only (ignored on HF Space).</span>
               </label>
 
               <div className="grid gap-3 text-sm text-studio-muted">

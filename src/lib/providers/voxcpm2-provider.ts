@@ -137,8 +137,11 @@ async function submitVoxCPM2Generation(
     cloneStrength,
     normalizeText,
     denoiseReference,
+    // inference_timesteps is the local server's 9th arg; the public HF Space has only 8, so only
+    // append it when pointed at a local server (else the call would error on arg count).
+    ...(/localhost|127\.0\.0\.1|0\.0\.0\.0/.test(baseUrl) ? [input.inferenceTimesteps ?? 10] : []),
     // Config-only Path B hook: a self-hosted Space whose /generate exposes extra controls
-    // (inference_timesteps, retry_badcase, …) receives them here without a code change.
+    // receives them here without a code change.
     ...parseExtraGenerateParams()
   ];
   const body = {

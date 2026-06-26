@@ -38,7 +38,7 @@ except Exception as exc:  # noqa: BLE001 - surface a clear startup failure
     raise
 
 
-def generate(text, control, audio, use_prompt_text, prompt_text, cfg_value, normalize, denoise):
+def generate(text, control, audio, use_prompt_text, prompt_text, cfg_value, normalize, denoise, inference_timesteps=None):
     """Exposes the full VoxCPM2 surface via the app's 8-arg payload:
       - control non-empty -> "(style/description) text" prefix = Controllable Cloning / Voice Design
       - audio present      -> Controllable Cloning (timbre from the reference)
@@ -66,7 +66,7 @@ def generate(text, control, audio, use_prompt_text, prompt_text, cfg_value, norm
             sf.write(ref_path, np.asarray(samples), int(sample_rate))
 
     cfg = float(cfg_value) if cfg_value is not None else 2.0
-    timesteps = int(os.environ.get("VOXCPM_TIMESTEPS", "10"))
+    timesteps = int(inference_timesteps) if inference_timesteps else int(os.environ.get("VOXCPM_TIMESTEPS", "10"))
 
     kwargs = {"text": text, "cfg_value": cfg, "inference_timesteps": timesteps}
     if ref_path:
@@ -95,6 +95,7 @@ demo = gr.Interface(
         gr.Slider(1.0, 4.0, value=2.0, step=0.1, label="cfg_value"),
         gr.Checkbox(label="normalize", value=True),
         gr.Checkbox(label="denoise", value=False),
+        gr.Slider(4, 50, value=10, step=1, label="inference_timesteps"),
     ],
     outputs=gr.Audio(label="output"),
     api_name="generate",

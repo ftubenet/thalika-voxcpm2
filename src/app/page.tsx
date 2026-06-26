@@ -46,6 +46,8 @@ export default function Home() {
   // VoxCPM2's cfg_value sweet spot is ~2.0; higher over-adheres to the prompt and sounds more
   // robotic/over-articulated. Default to the model-recommended value; the slider still goes to 3.0.
   const [cloneStrength, setCloneStrength] = useState(2.0);
+  // Diffusion sampling steps (local server only): higher = better quality, slower. Model default 10.
+  const [inferenceTimesteps, setInferenceTimesteps] = useState(10);
   const [denoiseReference, setDenoiseReference] = useState(false);
   const [normalizeText, setNormalizeText] = useState(true);
   const [status, setStatus] = useState<StudioStatus>("idle");
@@ -301,6 +303,7 @@ export default function Home() {
           emotion,
           cloneMode,
           cloneStrength,
+          inferenceTimesteps,
           denoiseReference,
           normalizeText,
           referenceAudio,
@@ -457,6 +460,8 @@ export default function Home() {
               emotion={emotion}
               cloneMode={cloneMode}
               cloneStrength={cloneStrength}
+              inferenceTimesteps={inferenceTimesteps}
+              onInferenceTimestepsChange={setInferenceTimesteps}
               denoiseReference={denoiseReference}
               normalizeText={normalizeText}
               referenceAudio={referenceAudio}

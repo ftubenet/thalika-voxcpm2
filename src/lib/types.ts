@@ -117,6 +117,7 @@ export interface GenerateVoiceRequest {
   emotion: VoiceEmotion;
   cloneMode?: CloneMode;
   cloneStrength?: number;
+  inferenceTimesteps?: number;
   denoiseReference?: boolean;
   normalizeText?: boolean;
   referenceAudio?: ReferenceAudioPayload;
