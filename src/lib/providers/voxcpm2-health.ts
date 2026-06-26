@@ -115,6 +115,10 @@ async function probeJson(baseUrl: string, endpoint: string) {
   }
 }
 
+function endpointName(baseUrl: string) {
+  return /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(baseUrl) ? "Local VoxCPM server" : "Hugging Face Space";
+}
+
 export async function checkVoxCPM2Health(): Promise<VoxCPM2Health> {
   const baseUrl = await getVoxCPM2BaseUrl();
 
@@ -126,7 +130,7 @@ export async function checkVoxCPM2Health(): Promise<VoxCPM2Health> {
         baseUrl,
         endpoint: "/gradio_api/info",
         latencyMs: info.latencyMs,
-        message: "VoxCPM2 Hugging Face Space is connected and exposes /generate."
+        message: `${endpointName(baseUrl)} is connected and exposes /generate.`
       });
     }
 
@@ -137,7 +141,7 @@ export async function checkVoxCPM2Health(): Promise<VoxCPM2Health> {
         baseUrl,
         endpoint: "/config",
         latencyMs: config.latencyMs,
-        message: "VoxCPM2 Hugging Face Space is connected and exposes generate."
+        message: `${endpointName(baseUrl)} is connected and exposes generate.`
       });
     }
 
@@ -161,7 +165,7 @@ export async function checkVoxCPM2Health(): Promise<VoxCPM2Health> {
       baseUrl,
       endpoint: "/gradio_api/info",
       latencyMs: 0,
-      message: "Hugging Face Space is currently unavailable."
+      message: `${endpointName(baseUrl)} is currently unavailable.`
     });
   }
 }

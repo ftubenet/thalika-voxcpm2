@@ -11,8 +11,13 @@ export interface ProviderHealth {
   ok: boolean;
   status: ProviderHealthStatus;
   message: string;
+  baseUrl?: string;
   latencyMs?: number;
   checkedAt?: string;
+}
+
+function isLocalUrl(url?: string) {
+  return Boolean(url && /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(url));
 }
 
 interface VoiceSettingsProps {
@@ -47,11 +52,11 @@ interface VoiceSettingsProps {
 }
 
 const healthLabel: Record<ProviderHealthStatus, string> = {
-  connected: "HF connected",
-  timeout: "HF timeout",
-  rate_limited: "HF rate limited",
-  unavailable: "HF unavailable",
-  invalid_response: "HF invalid response"
+  connected: "connected",
+  timeout: "timeout",
+  rate_limited: "rate limited",
+  unavailable: "unavailable",
+  invalid_response: "invalid response"
 };
 
 const healthClassName: Record<ProviderHealthStatus, string> = {
@@ -120,6 +125,7 @@ export function VoiceSettings({
 
   async function saveEndpoint(url: string) {
     setEndpointSaving(true);
+    setEndpointNote("");
     try {
       const response = await fetch("/api/settings/voxcpm2-endpoint", {
         method: "POST",
@@ -127,8 +133,14 @@ export function VoiceSettings({
         body: JSON.stringify({ baseUrl: url })
       });
       const data = await response.json();
+      if (!response.ok) {
+        setEndpointNote(data.error || "Could not save the endpoint.");
+        return;
+      }
       if (data.baseUrl) setEndpoint(data.baseUrl);
+      setEndpointNote(`Saved. Checking ${data.baseUrl} …`);
       onRefreshProviderHealth?.();
+      await refreshLocalStatus();
     } finally {
       setEndpointSaving(false);
     }
@@ -202,13 +214,13 @@ export function VoiceSettings({
         </div>
       </div>
       <div className="mt-5 grid gap-4">
-        <div className="grid gap-2 text-sm font-medium text-studio-muted">
+        {/* <div className="grid gap-2 text-sm font-medium text-studio-muted">
           Engine
           <div className="studio-control-bg rounded-2xl border border-white/10 px-3 py-3 text-studio-text">
             VoxCPM2 Multilingual
             <span className="ml-2 text-xs font-normal text-studio-muted">Burmese pronunciation QA applies automatically</span>
           </div>
-        </div>
+        </div> */}
 
         {isCloneProvider && (
           <div className="studio-nested-card-bg grid gap-3 rounded-[1.8rem] border border-white/10 p-4">
@@ -233,7 +245,11 @@ export function VoiceSettings({
                         : "border-slate-300 bg-slate-100 text-slate-600"
                       }`}
                   >
-                    {providerHealthLoading ? "Checking..." : providerHealth ? healthLabel[providerHealth.status] : "Not checked"}
+                    {providerHealthLoading
+                      ? "Checking..."
+                      : providerHealth
+                        ? `${isLocalUrl(providerHealth.baseUrl) ? "Local" : "HF"} ${healthLabel[providerHealth.status]}`
+                        : "Not checked"}
                   </span>
                   {onRefreshProviderHealth && (
                     <button
@@ -270,9 +286,9 @@ export function VoiceSettings({
               {localStatus.configured && (
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs font-medium text-studio-muted">
-                    Local server: {localStatus.running ? "running" : "stopped"}{localStatus.reachable ? " · reachable" : ""}
+                    Local server: {localStatus.reachable ? "running" : localStatus.running ? "starting…" : "stopped"}
                   </span>
-                  <button type="button" disabled={endpointSaving || localStatus.running} onClick={() => void startLocal()} className="studio-soft-chip-bg rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-studio-text disabled:opacity-45">Start</button>
+                  <button type="button" disabled={endpointSaving || localStatus.reachable || localStatus.running} onClick={() => void startLocal()} className="studio-soft-chip-bg rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-studio-text disabled:opacity-45">Start</button>
                   <button type="button" disabled={endpointSaving || !localStatus.running} onClick={() => void stopLocal()} className="studio-soft-chip-bg rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-studio-text disabled:opacity-45">Stop</button>
                 </div>
               )}
