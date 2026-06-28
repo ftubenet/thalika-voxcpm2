@@ -12,24 +12,22 @@ Core principles:
 
 - Keep the app local-first.
 - Keep generated audio as real PCM WAV.
-- Keep Burmese Production as the recommended provider.
 - Keep user data on local disk.
-- Use remote inference only when generation or rewrite is requested.
-- Do not add databases, auth, cloud storage, local AI model hosting, Python backends, Docker, Runpod, payments, or video features.
+- Use remote inference (HF Space) by default; a managed local VoxCPM2 server is supported as an optional faster path (see Local VoxCPM2 Server below).
+- Do not add databases, auth, cloud storage, Docker, Runpod, payments, or video features.
 
 ## Current Product Surface
 
 Main pages:
 
 - `Script`: paste an original script, rewrite it for narration using Gemini, then send it to Voice Over.
-- `Voice Over`: approve script normalization, select/upload voice reference, configure Burmese Production, and generate audio.
+- `Voice Over`: approve script normalization, select/upload voice reference, and generate audio.
 - `History`: play, download, delete, and review generated voice-over files.
 - `Folders`: inspect local storage, open managed folders, and migrate legacy audio into real PCM WAV.
 
-Current providers:
+Current provider:
 
-- `Burmese Production`: recommended Burmese preset built on VoxCPM2.
-- `VoxCPM2 Multilingual`: direct VoxCPM2 flow for supported multilingual scripts.
+- `VoxCPM2` (single engine). Burmese pronunciation QA (normalization + lexicon + approval gate) applies automatically when the script is detected as Burmese; multilingual scripts run raw VoxCPM2.
 
 Do not bring back Mock Provider, GPT-SoVITS, or CosyVoice unless the user explicitly asks.
 
@@ -41,14 +39,17 @@ Use:
 - React
 - TypeScript
 - TailwindCSS
-- Next.js Route Handlers for backend APIs
+- Next.js Route Handlers for the app backend
 - Zod for validation
 - local Markdown/JSON/files under `data/`
 
+For the optional local VoxCPM2 server (faster than the public HF Space):
+
+- Python 3.10–3.12 with the `voxcpm` package, served by its own Gradio demo
+- The Next.js app launches and manages this server as a separate process and talks to it over HTTP — it does NOT embed Python into the Next.js runtime. This is the supported path for local inference.
+
 Do not use:
 
-- Python backend
-- FastAPI
 - Docker
 - Runpod
 - Supabase
@@ -57,7 +58,6 @@ Do not use:
 - Firebase
 - authentication
 - payments
-- local GPU/model hosting
 
 All filesystem API routes must include:
 
@@ -114,7 +114,6 @@ Key files:
 Protect these layers:
 
 - reference audio or saved local profile
-- exact reference transcript when using high-fidelity behavior
 - browser-side reference quality report
 - Burmese normalization
 - local Burmese pronunciation lexicon
@@ -213,6 +212,21 @@ For UI changes, verify:
 - History player layout does not overlap
 - Folders storage cards still render
 - mobile and desktop views remain readable
+
+## Local VoxCPM2 Server
+
+For local inference that is faster and free of the public Space's rate limits:
+
+- Requires Python 3.10–3.12 and ideally a GPU (MPS works on Apple Silicon, CUDA on NVIDIA).
+- The app launches and manages a local VoxCPM2 Gradio server as a separate process via `/api/voxcpm-local` (start / stop / status). It never embeds Python in the Next.js runtime.
+- Key files:
+  - `local-server/server.py` (the actual Python Gradio server; source is tracked)
+  - `local-server/requirements.txt` and `local-server/README.md`
+  - `scripts/voxcpm-local.sh` (one-command launcher: venv + install + run)
+  - `src/app/api/voxcpm-local/route.ts`
+  - `src/lib/providers/voxcpm2-health.ts`
+  - `src/components/VoiceSettings.tsx`
+- The local server must expose the same Gradio `/generate` endpoint the app already speaks. `HF_VOXCPM2_URL` swaps the app to the local URL (`http://localhost:7860` by default).
 
 ## Git And Data Safety
 

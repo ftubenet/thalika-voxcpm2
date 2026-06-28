@@ -52,3 +52,9 @@ data/logs/*
 !data/profiles/.gitkeep
 !data/reviews/.gitkeep
 !data/memory/MEMORY.example.md
+
+# Local VoxCPM2 server runtime artifacts (the local-server/ source is tracked)
+local-server/.voxcpm-venv/
+local-server/__pycache__/
+local-server/*.pyc
+local-server/models/

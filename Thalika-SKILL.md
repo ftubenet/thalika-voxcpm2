@@ -7,7 +7,7 @@ description: Use this skill when working on the Thalika Voice Clone Studio proje
 
 Use this skill when a coding agent needs to understand, modify, review, or extend the Thalika project without re-learning the whole product from scratch.
 
-Thalika is a local-first voice-over studio for Burmese production voice cloning. It is not a cloud SaaS app, not a database app, and not a local model-hosting stack. The app keeps scripts, jobs, profiles, reviews, logs, and generated audio on the user's machine while calling remote inference providers only when generation or rewrite is requested.
+Thalika is a local-first voice-over studio for Burmese production voice cloning. It is not a cloud SaaS app, not a database app, and not a local model-hosting stack. The app keeps scripts, jobs, profiles, reviews, logs, and generated audio on the user's machine. By default it calls remote inference (VoxCPM2 Hugging Face Space) for generation and rewrite; a managed local VoxCPM2 server is supported as an optional faster path that the app launches as a separate process and talks to over HTTP.
 
 ## Product Intent
 
@@ -33,10 +33,10 @@ Do not add script generation as a separate creative writing product. The user al
 - Icons: lucide-react.
 - Audio decode: `@audio/decode-mp3` for immediate MP3-to-PCM conversion.
 - Storage: local files under `data/`; no database.
-- Voice inference: VoxCPM2 Hugging Face Space via native `fetch()`.
+- Voice inference: VoxCPM2 Hugging Face Space via native `fetch()` by default; an optional managed local VoxCPM2 server (Python, separate process) can be started in-app for faster local inference.
 - Script rewrite: Google Gemini API via configured API key.
 
-Never add Python, FastAPI, Docker, Runpod, Supabase, PostgreSQL, MongoDB, Firebase, authentication, payments, or local CUDA/model hosting unless the user explicitly changes the architecture.
+Never add Docker, Runpod, Supabase, PostgreSQL, MongoDB, Firebase, authentication, or payments. The optional local VoxCPM2 server (Python + the `voxcpm` package, launched as a separate process) is the supported local-inference path; do not embed Python into the Next.js runtime.
 
 ## UX Structure
 
