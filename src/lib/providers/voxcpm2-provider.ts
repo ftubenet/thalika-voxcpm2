@@ -105,33 +105,41 @@ async function uploadReferenceAudio(baseUrl: string, referenceAudio: ReferenceAu
 async function submitVoxCPM2Generation(
   baseUrl: string,
   input: GenerateVoiceInput,
-  uploadedReferencePath: string,
+  uploadedReferencePath: string | undefined,
   scriptChunk: string,
   chunkIndex: number,
   chunkCount: number
 ) {
   const cloneMode = input.cloneMode || "high_fidelity";
-  // cfg_value: VoxCPM2's documented sweet spot is ~2.0. Higher improves prompt adherence but
-  // reduces naturalness (more robotic), so keep defaults near 2.0 — the slider can still override.
-  const cloneStrength = Math.min(3, Math.max(1, input.cloneStrength ?? (cloneMode === "high_fidelity" ? 2 : 1.7)));
+  // cfg_value (a.k.a. cloneStrength): higher = stronger adherence to the reference = more consistent
+  // timbre across chunks (at some naturalness cost). For high_fidelity we prioritize cross-chunk
+  // stability over naturalness (per the explicit stability-first goal), so default higher. `balanced`
+  // keeps the lower, more natural value. The user's slider still overrides both.
+  const cloneStrength = Math.min(3, Math.max(1, input.cloneStrength ?? (cloneMode === "high_fidelity" ? 2.5 : 1.7)));
   const denoiseReference = input.denoiseReference ?? false;
   const normalizeText = input.normalizeText ?? true;
   // NEVER send prompt_text (use_prompt_text=false): VoxCPM speaks the prompt transcript and
   // prepends it to the output ("ultimate mode" leak). Audio-only cloning is clean — proven by
   // direct testing — and means the user never has to type the reference transcript.
-  // Short STYLE descriptor: VoxCPM2 steers expression from a "(...)" prefix the server builds
-  // from this. The model already clones timbre from the reference, so the verbose "preserve
-  // identity" prose was dead weight; emotion + pace is what actually shapes delivery.
-  const controlInstruction = `${emotionControls[input.emotion]}, ${speedControl(input.speed)}`;
+  // The server turns `control` into a "(...)" prefix. Voice Design (no reference): the prefix IS
+  // the user's voice description. Cloning: it's a short emotion+pace style (timbre comes from the
+  // reference, so the old verbose "preserve identity" prose was dead weight).
+  const isVoiceDesign = !uploadedReferencePath && Boolean(input.voiceDescription?.trim());
+  const controlInstruction = isVoiceDesign
+    ? input.voiceDescription!.trim()
+    : `${emotionControls[input.emotion]}, ${speedControl(input.speed)}`;
   const data: unknown[] = [
     scriptChunk,
     controlInstruction,
-    {
-      path: uploadedReferencePath,
-      orig_name: sanitizeFilename(input.referenceAudio?.filename || "reference.wav"),
-      mime_type: input.referenceAudio?.mimeType || "audio/wav",
-      meta: { _type: "gradio.FileData" }
-    },
+    // null audio = Voice Design (no reference); else the uploaded reference FileData for cloning.
+    uploadedReferencePath
+      ? {
+          path: uploadedReferencePath,
+          orig_name: sanitizeFilename(input.referenceAudio?.filename || "reference.wav"),
+          mime_type: input.referenceAudio?.mimeType || "audio/wav",
+          meta: { _type: "gradio.FileData" }
+        }
+      : null,
     false, // use_prompt_text — always off; see comment above
     "", // prompt_text — never sent
     cloneStrength,
@@ -255,12 +263,14 @@ function diagnosticError(error: unknown) {
 }
 
 async function generateRemote(input: GenerateVoiceInput) {
-  if (!input.referenceAudio) {
+  // Voice Design = no reference + a description; the model creates a new voice from the text.
+  const referenceAudio = input.referenceAudio;
+  const isVoiceDesign = !referenceAudio && Boolean(input.voiceDescription?.trim());
+  if (!referenceAudio && !isVoiceDesign) {
     throw new RemoteProviderError("Missing reference audio", {
       publicMessage: "VoxCPM2 requires reference audio for voice cloning."
     });
   }
-  const referenceAudio = input.referenceAudio;
 
   await ensureDataDirs();
   const baseUrl = await getVoxCPM2BaseUrl();
@@ -271,18 +281,20 @@ async function generateRemote(input: GenerateVoiceInput) {
     });
   }
 
-  const uploadedReferencePath = await withRetry(
-    () => uploadReferenceAudio(baseUrl, referenceAudio),
-    shouldRetryHFError,
-    2,
-    async (error, attempt) => {
-      await appendGenerationLog("reference_upload_retry", {
-        jobId: input.jobId,
-        attempt,
-        error: diagnosticError(error)
-      });
-    }
-  );
+  const uploadedReferencePath = referenceAudio
+    ? await withRetry(
+        () => uploadReferenceAudio(baseUrl, referenceAudio),
+        shouldRetryHFError,
+        2,
+        async (error, attempt) => {
+          await appendGenerationLog("reference_upload_retry", {
+            jobId: input.jobId,
+            attempt,
+            error: diagnosticError(error)
+          });
+        }
+      )
+    : undefined;
   const outputStem = sanitizeFilename(`voice_${idStamp()}`);
   const temporaryDir = await fs.mkdtemp(path.join(os.tmpdir(), "thalika-voxcpm2-"));
   let result: GenerateVoiceResult | undefined;
@@ -301,6 +313,21 @@ async function generateRemote(input: GenerateVoiceInput) {
       totalChunks: chunks.length,
       message: `Preparing ${chunks.length} audio segment${chunks.length === 1 ? "" : "s"}.`
     });
+
+    // Warmup (multi-chunk only): the model sometimes emits noise/stutter on its very first
+    // inference after being idle (cold start). Running ONE short, fully-completed throwaway take
+    // warms the weights before the real chunk 0 runs, so the first real chunk isn't penalized.
+    // Cost: one extra full inference per multi-chunk job. Best-effort — a warmup failure must NOT
+    // abort the job, the real generation still runs.
+    if (chunks.length > 1 && uploadedReferencePath) {
+      try {
+        const warmupSubmission = await submitVoxCPM2Generation(baseUrl, input, uploadedReferencePath, "။", -1, chunks.length);
+        await fetchVoxCPM2Result(baseUrl, warmupSubmission.eventId, input, -1, chunks.length);
+        await appendGenerationLog("warmup_completed", { jobId: input.jobId });
+      } catch (error) {
+        await appendGenerationLog("warmup_failed", { jobId: input.jobId, error: diagnosticError(error) });
+      }
+    }
 
     for (const [chunkIndex, chunk] of chunks.entries()) {
       await appendGenerationLog("chunk_started", {
