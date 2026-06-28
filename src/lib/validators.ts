@@ -40,6 +40,7 @@ export const generateRequestSchema = z
     normalizeText: z.boolean().optional(),
     referenceAudio: referenceAudioSchema.optional(),
     referenceText: z.string().trim().max(2000, "Reference transcript must be 2000 characters or fewer").optional().or(z.literal("")),
+    voiceDescription: z.string().trim().max(500, "Voice description must be 500 characters or fewer").optional().or(z.literal("")),
     voiceProfileId: z.string().regex(/^profile_[a-zA-Z0-9_-]+$/, "Invalid voice profile id").optional(),
     referenceQualityReport: referenceQualitySchema.optional(),
     approvedNormalizedScript: z.string().trim().max(MAX_SCRIPT_CHARACTERS).optional(),
@@ -51,11 +52,13 @@ export const generateRequestSchema = z
     // gate) automatically — the trigger is the detected language, not a separate provider.
     const isBurmeseScript = detectScriptLanguage(value.script).code === "my";
 
-    if (!value.referenceAudio && !value.voiceProfileId) {
+    // Need one source of voice identity: reference audio, a saved profile, or — for Voice Design —
+    // a text description. (Design = no reference + a description; the model creates a new voice.)
+    if (!value.referenceAudio && !value.voiceProfileId && !value.voiceDescription?.trim()) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["referenceAudio"],
-        message: "VoxCPM2 requires reference audio for voice cloning"
+        message: "Add a reference clip to clone, or a voice description to design a new voice"
       });
     }
     // The reference transcript is intentionally NOT required: it is never sent to the model

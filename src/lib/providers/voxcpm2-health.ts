@@ -16,13 +16,27 @@ export interface VoxCPM2Health {
   checkedAt: string;
 }
 
-const defaultVoxCPM2SpaceUrl = "https://openbmb-voxcpm-demo.hf.space";
+// Local-first default: the managed local VoxCPM2 server (scripts/voxcpm-local.sh) exposes the
+// same /generate contract the app speaks and gives full control over inference_timesteps (the
+// biggest stability/quality lever, locked out on the public Space). Point HF_VOXCPM2_URL at the
+// public/demo Space explicitly if you want remote inference instead.
+const localVoxCPM2Url = "http://localhost:7860";
+const publicSpaceFallback = "https://openbmb-voxcpm-demo.hf.space";
 
-// Precedence: user setting (.env.local, set in-app) > env > default Space.
+// Precedence: user setting (.env.local, set in-app) > env > local default.
 export async function getVoxCPM2BaseUrl() {
   const stored = await readEnvKey("HF_VOXCPM2_URL");
-  return (stored || process.env.HF_VOXCPM2_URL || defaultVoxCPM2SpaceUrl).replace(/\/+$/, "");
+  return (stored || process.env.HF_VOXCPM2_URL || localVoxCPM2Url).replace(/\/+$/, "");
 }
+
+// True when the active endpoint is the local server. Used to enable local-only levers (extra
+// /generate args like inference_timesteps) that the public Space's fixed signature would reject.
+export async function isLocalVoxCPM2Endpoint() {
+  const baseUrl = await getVoxCPM2BaseUrl();
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(baseUrl);
+}
+
+export const VOXCPM2_PUBLIC_SPACE_URL = publicSpaceFallback;
 
 function makeHealth(
   status: VoxCPM2HealthStatus,
@@ -80,7 +94,7 @@ async function probeJson(baseUrl: string, endpoint: string) {
       baseUrl,
       endpoint,
       latencyMs,
-      message: "Public Hugging Face Space is rate limited."
+      message: `${endpointName(baseUrl)} is rate limited.`
     });
   }
 
@@ -89,7 +103,7 @@ async function probeJson(baseUrl: string, endpoint: string) {
       baseUrl,
       endpoint,
       latencyMs,
-      message: "Hugging Face Space is currently unavailable."
+      message: `${endpointName(baseUrl)} is currently unavailable.`
     });
   }
 
@@ -98,7 +112,7 @@ async function probeJson(baseUrl: string, endpoint: string) {
       baseUrl,
       endpoint,
       latencyMs,
-      message: `Hugging Face Space returned HTTP ${response.status}.`
+      message: `${endpointName(baseUrl)} returned HTTP ${response.status}.`
     });
   }
 

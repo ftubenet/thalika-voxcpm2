@@ -48,6 +48,9 @@ export default function Home() {
   const [cloneStrength, setCloneStrength] = useState(2.0);
   // Diffusion sampling steps (local server only): higher = better quality, slower. Model default 10.
   const [inferenceTimesteps, setInferenceTimesteps] = useState(10);
+  // Clone (from a reference clip) vs Design (create a new voice from a text description, no reference).
+  const [voiceMode, setVoiceMode] = useState<"clone" | "design">("clone");
+  const [voiceDescription, setVoiceDescription] = useState("");
   const [denoiseReference, setDenoiseReference] = useState(false);
   const [normalizeText, setNormalizeText] = useState(true);
   const [status, setStatus] = useState<StudioStatus>("idle");
@@ -279,7 +282,16 @@ export default function Home() {
   }
 
   async function generateAudio() {
-    const preflight = preflightProvider({ provider, script, referenceAudio, voiceProfileId: selectedProfileId || undefined, referenceText, normalizationApproved, cloneMode });
+    const preflight = preflightProvider({
+      provider,
+      script,
+      referenceAudio: voiceMode === "design" ? undefined : referenceAudio,
+      voiceProfileId: voiceMode === "design" ? undefined : selectedProfileId || undefined,
+      referenceText,
+      normalizationApproved,
+      cloneMode,
+      voiceDescription: voiceMode === "design" ? voiceDescription : undefined
+    });
     if (scriptError || !preflight.ok) {
       setError(preflight.message);
       setStatus("failed");
@@ -306,9 +318,10 @@ export default function Home() {
           inferenceTimesteps,
           denoiseReference,
           normalizeText,
-          referenceAudio,
+          referenceAudio: voiceMode === "design" ? undefined : referenceAudio,
           referenceText,
-          voiceProfileId: selectedProfileId || undefined,
+          voiceDescription: voiceMode === "design" ? voiceDescription : undefined,
+          voiceProfileId: voiceMode === "design" ? undefined : selectedProfileId || undefined,
           referenceQualityReport,
           approvedNormalizedScript: normalization?.normalizedScript,
           lexiconRevision: normalization?.lexiconRevision,
@@ -379,22 +392,34 @@ export default function Home() {
   }
 
   const isGenerating = status === "saving" || status === "generating";
-  const referenceRequirementError =
-    referenceAudioError ||
-    (!referenceAudio && !selectedProfileId
-      ? "VoxCPM2 requires reference audio for voice cloning."
-      : referenceAudio?.durationSeconds && referenceAudio.durationSeconds < 3
-        ? "Reference audio is too short. Use at least 3 seconds, ideally 6-15 seconds."
-        : referenceAudio?.durationSeconds && referenceAudio.durationSeconds > 50
-          ? "Reference audio is too long for VoxCPM2. Trim it to 6-30 seconds of clean speech."
-          : "");
+  const isDesign = voiceMode === "design";
+  const referenceRequirementError = isDesign
+    ? voiceDescription.trim()
+      ? ""
+      : "Describe the voice to design (e.g. a calm young man, warm tone)."
+    : referenceAudioError ||
+      (!referenceAudio && !selectedProfileId
+        ? "VoxCPM2 requires reference audio for voice cloning."
+        : referenceAudio?.durationSeconds && referenceAudio.durationSeconds < 3
+          ? "Reference audio is too short. Use at least 3 seconds, ideally 6-15 seconds."
+          : referenceAudio?.durationSeconds && referenceAudio.durationSeconds > 50
+            ? "Reference audio is too long for VoxCPM2. Trim it to 6-30 seconds of clean speech."
+            : "");
   const generateDisabled =
     Boolean(scriptError) ||
     isGenerating ||
-    (!referenceAudio && !selectedProfileId) ||
     Boolean(referenceRequirementError) ||
     (isBurmeseScript && (referenceQualityReport?.status === "block" || !normalizationApproved));
-  const activePreflight: ProviderPreflightResult = preflightProvider({ provider, script, referenceAudio, voiceProfileId: selectedProfileId || undefined, referenceText, normalizationApproved, cloneMode });
+  const activePreflight: ProviderPreflightResult = preflightProvider({
+    provider,
+    script,
+    referenceAudio: isDesign ? undefined : referenceAudio,
+    voiceProfileId: isDesign ? undefined : selectedProfileId || undefined,
+    referenceText,
+    normalizationApproved,
+    cloneMode,
+    voiceDescription: isDesign ? voiceDescription : undefined
+  });
   const capabilityDisabled = !activePreflight.ok;
   const disabledReason =
     scriptError ||
@@ -456,6 +481,10 @@ export default function Home() {
           <aside className="grid content-start gap-5">
             <VoiceSettings
               provider={provider}
+              voiceMode={voiceMode}
+              onVoiceModeChange={setVoiceMode}
+              voiceDescription={voiceDescription}
+              onVoiceDescriptionChange={setVoiceDescription}
               speed={speed}
               emotion={emotion}
               cloneMode={cloneMode}

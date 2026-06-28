@@ -42,8 +42,13 @@ except Exception as exc:  # noqa: BLE001 - surface a clear startup failure
     raise
 
 
-def generate(text, control, audio, use_prompt_text, prompt_text, cfg_value, normalize, denoise, inference_timesteps=None):
-    """Exposes the full VoxCPM2 surface via the app's 8-arg payload:
+def generate(text, control, audio, use_prompt_text, prompt_text, cfg_value, normalize, denoise, inference_timesteps=None, retry_badcase=None):
+    """Exposes the full VoxCPM2 surface via the app's 8-arg payload, plus local-only controls:
+      args 1-8 (app's public-Space signature):
+        text, control, audio, use_prompt_text, prompt_text, cfg_value, normalize, denoise
+      args 9-10 (local server only — the public Space's 8-arg signature would reject them):
+        inference_timesteps : diffusion sampling steps (the biggest quality/stability lever)
+        retry_badcase       : auto-retry degenerate takes (repeat/echo) on the server side
       - control non-empty -> "(style/description) text" prefix = Controllable Cloning / Voice Design
       - audio present      -> Controllable Cloning (timbre from the reference)
       - audio absent       -> Voice Design (a brand-new voice from the description, no reference)
@@ -71,13 +76,16 @@ def generate(text, control, audio, use_prompt_text, prompt_text, cfg_value, norm
 
     cfg = float(cfg_value) if cfg_value is not None else 2.0
     timesteps = int(inference_timesteps) if inference_timesteps else int(os.environ.get("VOXCPM_TIMESTEPS", "10"))
+    # retry_badcase: True = auto-retry degenerate (repeat/echo) takes. Defaults True in the model;
+    # the app always sends True for local. None (e.g. an older caller) -> keep the model default.
+    do_retry = bool(retry_badcase) if retry_badcase is not None else True
 
-    # normalize (text) + denoise (reference) were sent by the app but dropped here — forward them.
-    # retry_badcase defaults True in the model, so repeat/echo bad cases are already auto-retried.
+    # normalize (text) + denoise (reference) are forwarded; denoise is gated on the denoiser load.
     kwargs = {
         "text": text,
         "cfg_value": cfg,
         "inference_timesteps": timesteps,
+        "retry_badcase": do_retry,
         "normalize": bool(normalize),
         "denoise": bool(denoise) and LOAD_DENOISER,
     }
@@ -108,6 +116,7 @@ demo = gr.Interface(
         gr.Checkbox(label="normalize", value=True),
         gr.Checkbox(label="denoise", value=False),
         gr.Slider(4, 50, value=10, step=1, label="inference_timesteps"),
+        gr.Checkbox(label="retry_badcase", value=True),
     ],
     outputs=gr.Audio(label="output"),
     api_name="generate",

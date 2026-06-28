@@ -32,7 +32,7 @@ import {
   TimeoutError,
   withRetry
 } from "./hf-utils";
-import { getVoxCPM2BaseUrl } from "./voxcpm2-health";
+import { getVoxCPM2BaseUrl, isLocalVoxCPM2Endpoint } from "./voxcpm2-health";
 
 const emotionControls: Record<VoiceEmotion, string> = {
   neutral: "neutral expression",
@@ -49,10 +49,17 @@ function speedControl(speed: number) {
   return "natural pacing";
 }
 
-// Optional escape hatch for a self-hosted VoxCPM2 Space whose /generate exposes extra controls.
-// Set VOXCPM2_EXTRA_PARAMS to a JSON array appended to the Gradio data[] in the order your Space
-// expects (e.g. [20, true] for inference_timesteps + retry_badcase). Unset keeps the demo payload.
-function parseExtraGenerateParams(): unknown[] {
+// Extra /generate args appended AFTER the 8 public-Space args. These controls are exposed by the
+// local server (and any self-hosted Space) but NOT by the public demo — so they must only be sent
+// when the endpoint actually accepts them, or the public Space's fixed 8-arg signature 500s.
+//
+// Local server contract (local-server/server.py): arg 9 = inference_timesteps, arg 10 = retry_badcase.
+// The user's "Quality steps" slider drives inference_timesteps; retry_badcase is on for stability.
+// For a NON-local self-hosted Space, VOXCPM2_EXTRA_PARAMS is the expert escape hatch instead.
+async function resolveExtraGenerateParams(isLocal: boolean, inferenceTimesteps: number | undefined) {
+  if (isLocal) {
+    return [Math.min(50, Math.max(4, inferenceTimesteps ?? 24)), true];
+  }
   const raw = process.env.VOXCPM2_EXTRA_PARAMS?.trim();
   if (!raw) return [];
   try {
@@ -128,6 +135,9 @@ async function submitVoxCPM2Generation(
   const controlInstruction = isVoiceDesign
     ? input.voiceDescription!.trim()
     : `${emotionControls[input.emotion]}, ${speedControl(input.speed)}`;
+  // Resolve per-endpoint: local server gets [inference_timesteps, retry_badcase]; a self-hosted
+  // Space gets VOXCPM2_EXTRA_PARAMS; the public demo gets nothing (its 8-arg signature would 500).
+  const extraParams = await resolveExtraGenerateParams(await isLocalVoxCPM2Endpoint(), input.inferenceTimesteps);
   const data: unknown[] = [
     scriptChunk,
     controlInstruction,
@@ -145,12 +155,10 @@ async function submitVoxCPM2Generation(
     cloneStrength,
     normalizeText,
     denoiseReference,
-    // inference_timesteps is the local server's 9th arg; the public HF Space has only 8, so only
-    // append it when pointed at a local server (else the call would error on arg count).
-    ...(/localhost|127\.0\.0\.1|0\.0\.0\.0/.test(baseUrl) ? [input.inferenceTimesteps ?? 10] : []),
-    // Config-only Path B hook: a self-hosted Space whose /generate exposes extra controls
-    // receives them here without a code change.
-    ...parseExtraGenerateParams()
+    // Local server (or a self-hosted Space via VOXCPM2_EXTRA_PARAMS) gets extra controls the
+    // public demo rejects: [inference_timesteps, retry_badcase]. Resolved per-endpoint so the
+    // public Space's fixed 8-arg signature never receives a 9th arg.
+    ...extraParams
   ];
   const body = {
     data

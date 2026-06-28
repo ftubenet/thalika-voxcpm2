@@ -118,6 +118,7 @@ export interface GenerateVoiceRequest {
   cloneMode?: CloneMode;
   cloneStrength?: number;
   inferenceTimesteps?: number;
+  voiceDescription?: string;
   denoiseReference?: boolean;
   normalizeText?: boolean;
   referenceAudio?: ReferenceAudioPayload;

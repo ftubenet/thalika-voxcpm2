@@ -49,7 +49,7 @@ export const providerCapabilities: Record<VoiceProvider, ProviderCapability> = {
 };
 
 export function preflightProvider(
-  input: Pick<GenerateVoiceRequest, "provider" | "script" | "referenceAudio" | "voiceProfileId" | "referenceText" | "normalizationApproved" | "cloneMode">
+  input: Pick<GenerateVoiceRequest, "provider" | "script" | "referenceAudio" | "voiceProfileId" | "referenceText" | "normalizationApproved" | "cloneMode" | "voiceDescription">
 ): ProviderPreflightResult {
   const capability = providerCapabilities[input.provider];
   const detectedLanguage = detectScriptLanguage(input.script);
@@ -84,13 +84,13 @@ export function preflightProvider(
     };
   }
 
-  if (!input.referenceAudio && !input.voiceProfileId) {
+  if (!input.referenceAudio && !input.voiceProfileId && !input.voiceDescription?.trim()) {
     return {
       ok: false,
       severity: "blocked",
       detectedLanguage,
-      message: "Voice cloning requires reference audio.",
-      nextStep: "Upload a clean speaker reference clip."
+      message: "Clone a voice (reference clip) or design one (voice description).",
+      nextStep: "Upload a reference, or switch to Design and describe the voice."
     };
   }
 

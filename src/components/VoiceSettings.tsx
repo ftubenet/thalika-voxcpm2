@@ -22,6 +22,10 @@ function isLocalUrl(url?: string) {
 
 interface VoiceSettingsProps {
   provider: VoiceProvider;
+  voiceMode: "clone" | "design";
+  onVoiceModeChange: (value: "clone" | "design") => void;
+  voiceDescription: string;
+  onVoiceDescriptionChange: (value: string) => void;
   speed: number;
   emotion: VoiceEmotion;
   cloneMode: CloneMode;
@@ -71,6 +75,10 @@ const healthClassName: Record<ProviderHealthStatus, string> = {
 
 export function VoiceSettings({
   provider,
+  voiceMode,
+  onVoiceModeChange,
+  voiceDescription,
+  onVoiceDescriptionChange,
   speed,
   emotion,
   cloneMode,
@@ -299,6 +307,20 @@ export function VoiceSettings({
               {endpointNote && <p className="text-xs leading-5 text-studio-muted">{endpointNote}</p>}
             </div>
 
+            <div className="flex gap-2">
+              <button type="button" onClick={() => onVoiceModeChange("clone")} className={`flex-1 rounded-full border px-3 py-1.5 text-xs font-semibold ${voiceMode === "clone" ? "border-studio-accent bg-studio-accent/10 text-emerald-800" : "border-white/10 text-studio-muted"}`}>Clone a voice</button>
+              <button type="button" onClick={() => onVoiceModeChange("design")} className={`flex-1 rounded-full border px-3 py-1.5 text-xs font-semibold ${voiceMode === "design" ? "border-studio-accent bg-studio-accent/10 text-emerald-800" : "border-white/10 text-studio-muted"}`}>Design a voice</button>
+            </div>
+
+            {voiceMode === "design" && (
+              <label className="grid gap-2 text-sm font-medium text-studio-muted">
+                Voice description
+                <textarea value={voiceDescription} onChange={(event) => onVoiceDescriptionChange(event.target.value)} maxLength={500} placeholder="A calm young man, warm tone, slightly slow…" className="studio-control-bg min-h-24 rounded-2xl border border-white/10 px-3 py-3 text-studio-text outline-none focus:border-studio-accent" />
+                <span className="text-xs font-normal text-studio-muted">No reference needed — VoxCPM2 creates a new voice from this description.</span>
+              </label>
+            )}
+
+            {voiceMode === "clone" && (<>
             <label className="grid gap-2 text-sm font-medium text-studio-muted">
               Saved voice profile
               <select value={selectedProfileId || ""} onChange={(event) => onProfileSelect(event.target.value)} className="studio-control-bg rounded-2xl border border-white/10 px-3 py-3 text-studio-text outline-none focus:border-studio-accent">
@@ -364,6 +386,7 @@ export function VoiceSettings({
                 <Trash2 size={15} /> Delete Selected Profile
               </button>
             )}
+            </>)}
           </div>
         )}
 
