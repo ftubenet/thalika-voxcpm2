@@ -206,7 +206,21 @@ async function migrateCandidate(candidate: MigrationCandidate) {
   }
 }
 
-export async function migrateLegacyOutputsToPcmWav(): Promise<OutputWavMigrationResult> {
+// migrateCandidate backs up, renames, and rewrites job references with no per-file locking, so
+// two overlapping runs would double-back-up and race the in-place .wav rename / job updates.
+// Serialize within this process: concurrent callers share the single in-flight run's result
+// (the first pass already drains every candidate, so a second scan would just find nothing).
+let migrationInFlight: Promise<OutputWavMigrationResult> | null = null;
+
+export function migrateLegacyOutputsToPcmWav(): Promise<OutputWavMigrationResult> {
+  if (migrationInFlight) return migrationInFlight;
+  migrationInFlight = runOutputWavMigration().finally(() => {
+    migrationInFlight = null;
+  });
+  return migrationInFlight;
+}
+
+async function runOutputWavMigration(): Promise<OutputWavMigrationResult> {
   await ensureDataDirs();
   const before = await inspectCandidates();
   let convertedFiles = 0;

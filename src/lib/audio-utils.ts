@@ -320,7 +320,10 @@ export function encodePcm24Wav(
     const mixedSample =
       channelData.reduce((sum, channel) => sum + channel[sampleIndex], 0) /
       channelData.length;
-    const sample = Math.max(-1, Math.min(1, mixedSample));
+    // A NaN/Infinity sample (e.g. from a corrupt MP3 decode) would make writeIntLE throw
+    // RangeError and crash the whole merge. Treat non-finite samples as silence.
+    const finiteSample = Number.isFinite(mixedSample) ? mixedSample : 0;
+    const sample = Math.max(-1, Math.min(1, finiteSample));
     const integerSample =
       sample < 0
         ? Math.round(sample * 0x800000)
@@ -365,6 +368,13 @@ export async function convertRemoteAudioToPcm24Wav(
   };
 }
 
+// Playback length of a PCM master buffer, used to detect VoxCPM "bad cases" (a take far longer
+// than the text warrants — a repeat or a leaked reference echo) by its chars-per-second.
+export function pcm24DurationSeconds(buffer: Buffer) {
+  const wav = parsePcmWavBuffer(buffer);
+  return wav.byteRate > 0 ? wav.data.length / wav.byteRate : 0;
+}
+
 export function validatePcm24MasterBuffer(buffer: Buffer) {
   const wav = parsePcmWavBuffer(buffer);
 
@@ -390,6 +400,114 @@ export function getPunctuationAwarePauseMilliseconds(scriptChunk: string) {
   }
 
   return 120;
+}
+
+const INT24_MAX = 0x7fffff;
+const INT24_MIN = -0x800000;
+// Master to -1 dBFS so output level is consistent and "produced" without inter-sample clipping.
+const MASTER_PEAK_TARGET_DBFS = -1;
+// Short edge fades remove the start/end click of a hard PCM cut.
+const MASTER_FADE_MILLISECONDS = 4;
+// Cap the lift so a quiet/near-silent take is not amplified into its own noise floor.
+const MASTER_MAX_GAIN = 6;
+// Skip very long files to keep this in-memory pass bounded (~25 min at the master format).
+const MASTER_MAX_DATA_BYTES = 256 * 1024 * 1024;
+
+// A chunk counts as voiced above this fraction of its own peak (~ -36 dBFS relative).
+const SILENCE_THRESHOLD_RATIO = 0.015;
+// Always keep this much audio around the voiced region so a soft onset/tail is never clipped.
+const SILENCE_GUARD_MILLISECONDS = 25;
+
+// Trim leading/trailing near-silence from one 24-bit chunk so the only inter-chunk gap is the
+// controlled punctuation pause (VoxCPM pads each chunk with variable silence → choppy rhythm).
+// Conservative by design: a per-chunk relative threshold plus a guard margin, so worst case it
+// trims slightly less, never into speech.
+export async function trimSilenceEdges(filePath: string) {
+  const wav = await parsePcmWavFile(filePath);
+  const bytesPerSample = wav.bitsPerSample / 8;
+  if (bytesPerSample !== 3 || wav.dataSize === 0) return;
+
+  const handle = await fs.open(filePath, "r");
+  let data: Buffer;
+  try {
+    data = Buffer.alloc(wav.dataSize);
+    const { bytesRead } = await handle.read(data, 0, wav.dataSize, wav.dataStart);
+    if (bytesRead !== wav.dataSize) return;
+  } finally {
+    await handle.close();
+  }
+
+  const sampleCount = Math.floor(wav.dataSize / bytesPerSample);
+  if (sampleCount === 0) return;
+
+  let peak = 0;
+  for (let i = 0; i < sampleCount; i += 1) {
+    const magnitude = Math.abs(data.readIntLE(i * bytesPerSample, bytesPerSample));
+    if (magnitude > peak) peak = magnitude;
+  }
+  if (peak === 0) return; // entirely silent — leave it for the merge/pause logic
+
+  const threshold = peak * SILENCE_THRESHOLD_RATIO;
+  let first = 0;
+  while (first < sampleCount && Math.abs(data.readIntLE(first * bytesPerSample, bytesPerSample)) <= threshold) first += 1;
+  let last = sampleCount - 1;
+  while (last > first && Math.abs(data.readIntLE(last * bytesPerSample, bytesPerSample)) <= threshold) last -= 1;
+  if (first >= last) return;
+
+  const guard = Math.round((wav.sampleRate * SILENCE_GUARD_MILLISECONDS) / 1000);
+  const start = Math.max(0, first - guard);
+  const end = Math.min(sampleCount, last + 1 + guard);
+  if (start === 0 && end === sampleCount) return; // nothing to trim
+
+  const trimmed = data.subarray(start * bytesPerSample, end * bytesPerSample);
+  const header = createPcmWavHeader(wav, trimmed.length);
+  await fs.writeFile(filePath, Buffer.concat([header, trimmed]));
+}
+
+// Peak-normalize a finished 24-bit master in place and apply tiny edge fades. Both operations are
+// purely multiplicative, so inserted silence stays silent and no sample can exceed the target.
+export async function normalizeMasterPeak(filePath: string) {
+  const wav = await parsePcmWavFile(filePath);
+  const bytesPerSample = wav.bitsPerSample / 8;
+  if (bytesPerSample !== 3 || wav.dataSize === 0 || wav.dataSize > MASTER_MAX_DATA_BYTES) return;
+
+  const handle = await fs.open(filePath, "r+");
+  try {
+    const data = Buffer.alloc(wav.dataSize);
+    const { bytesRead } = await handle.read(data, 0, wav.dataSize, wav.dataStart);
+    if (bytesRead !== wav.dataSize) return;
+
+    const sampleCount = Math.floor(wav.dataSize / bytesPerSample);
+    if (sampleCount === 0) return;
+
+    let peak = 0;
+    for (let i = 0; i < sampleCount; i += 1) {
+      const magnitude = Math.abs(data.readIntLE(i * bytesPerSample, bytesPerSample));
+      if (magnitude > peak) peak = magnitude;
+    }
+    if (peak === 0) return;
+
+    const targetInt = Math.pow(10, MASTER_PEAK_TARGET_DBFS / 20) * INT24_MAX;
+    const gain = Math.min(MASTER_MAX_GAIN, targetInt / peak);
+    const fadeSamples = Math.min(
+      Math.floor(sampleCount / 2),
+      Math.round((wav.sampleRate * MASTER_FADE_MILLISECONDS) / 1000)
+    );
+
+    for (let i = 0; i < sampleCount; i += 1) {
+      let value = data.readIntLE(i * bytesPerSample, bytesPerSample) * gain;
+      if (fadeSamples > 0) {
+        if (i < fadeSamples) value *= (i + 1) / fadeSamples;
+        else if (i >= sampleCount - fadeSamples) value *= (sampleCount - i) / fadeSamples;
+      }
+      const clamped = Math.max(INT24_MIN, Math.min(INT24_MAX, Math.round(value)));
+      data.writeIntLE(clamped, i * bytesPerSample, bytesPerSample);
+    }
+
+    await handle.write(data, 0, wav.dataSize, wav.dataStart);
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function validatePcm24MasterFile(filePath: string) {

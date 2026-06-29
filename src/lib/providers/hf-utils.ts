@@ -72,7 +72,9 @@ export async function fetchTextWithTimeout(url: string, init: RequestInit = {}, 
 }
 
 function retryDelay(attempt: number) {
-  return 600 * 2 ** attempt;
+  // Exponential backoff capped at 15s so a long retry budget (e.g. riding out a busy public
+  // Space's 503s) spaces requests out politely without growing unbounded.
+  return Math.min(15_000, 600 * 2 ** attempt);
 }
 
 function sleep(ms: number) {
@@ -123,7 +125,7 @@ export function assertOkResponse(response: Response, fallbackMessage: string) {
   if (response.status === 503) {
     throw new RemoteProviderError("Unavailable", {
       statusCode: response.status,
-      publicMessage: "Hugging Face Space is currently unavailable.",
+      publicMessage: "The public VoxCPM2 Space is busy or waking up. Wait a moment and generate again.",
       retryable: true
     });
   }
@@ -224,7 +226,9 @@ export function summarizeRemoteEvents(events: unknown[]) {
 }
 
 export function extractAudioUrlFromEvents(events: unknown[], baseUrl: string) {
-  for (const event of events.reverse()) {
+  // Copy before reversing: events is reused for diagnostics (summarizeRemoteEvents) after
+  // this throws, and reverse() would otherwise mutate the caller's array in place.
+  for (const event of [...events].reverse()) {
     const candidates = collectAudioCandidates(event);
     const candidate = candidates[0];
     if (!candidate) continue;

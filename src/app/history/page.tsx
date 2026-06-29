@@ -13,6 +13,7 @@ interface HistoryJob {
   format: string;
   createdAt: string;
   audioFile?: string;
+  rawAudioFile?: string;
   status: string;
   completedChunks?: number;
   totalChunks?: number;

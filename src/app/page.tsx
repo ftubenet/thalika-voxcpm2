@@ -10,6 +10,7 @@ import { StudioPageShell } from "@/components/StudioPageShell";
 import { VoiceSettings, type ProviderHealth } from "@/components/VoiceSettings";
 import { NormalizationApprovalPanel } from "@/components/NormalizationApprovalPanel";
 import { analyzeReferenceAudio } from "@/lib/browser-reference-audio";
+import { detectScriptLanguage } from "@/lib/language-utils";
 import { preflightProvider } from "@/lib/provider-capabilities";
 import { MAX_SCRIPT_CHARACTERS } from "@/lib/script-limits";
 import type {
@@ -38,15 +39,23 @@ interface VoiceOverDraft {
 export default function Home() {
   const [title, setTitle] = useState("");
   const [script, setScript] = useState("");
-  const [provider, setProvider] = useState<VoiceProvider>("burmese_production");
+  const [provider] = useState<VoiceProvider>("voxcpm2");
   const [speed, setSpeed] = useState(1);
   const [emotion, setEmotion] = useState<VoiceEmotion>("calm");
   const [cloneMode, setCloneMode] = useState<CloneMode>("high_fidelity");
-  const [cloneStrength, setCloneStrength] = useState(2.8);
+  // VoxCPM2's cfg_value sweet spot is ~2.0; higher over-adheres to the prompt and sounds more
+  // robotic/over-articulated. Default to the model-recommended value; the slider still goes to 3.0.
+  const [cloneStrength, setCloneStrength] = useState(2.0);
+  // Diffusion sampling steps (local server only): higher = better quality, slower. Model default 10.
+  const [inferenceTimesteps, setInferenceTimesteps] = useState(10);
+  // Clone (from a reference clip) vs Design (create a new voice from a text description, no reference).
+  const [voiceMode, setVoiceMode] = useState<"clone" | "design">("clone");
+  const [voiceDescription, setVoiceDescription] = useState("");
   const [denoiseReference, setDenoiseReference] = useState(false);
   const [normalizeText, setNormalizeText] = useState(true);
   const [status, setStatus] = useState<StudioStatus>("idle");
   const [error, setError] = useState("");
+  const [progress, setProgress] = useState<{ completed: number; total: number; message: string } | undefined>();
   const [audioResult, setAudioResult] = useState<AudioResult | undefined>();
   const [referenceAudio, setReferenceAudio] = useState<ReferenceAudioPayload | undefined>();
   const [referenceAudioError, setReferenceAudioError] = useState("");
@@ -61,6 +70,10 @@ export default function Home() {
   const [providerHealthLoading, setProviderHealthLoading] = useState(false);
   const [draftReady, setDraftReady] = useState(false);
   const loadedDraftRef = useRef(false);
+
+  // Burmese scripts automatically get the production QA layer (pronunciation normalization +
+  // approval gate). The trigger is the detected language, not a separate provider selection.
+  const isBurmeseScript = useMemo(() => detectScriptLanguage(script).code === "my", [script]);
 
   useEffect(() => {
     async function loadDraft() {
@@ -94,7 +107,7 @@ export default function Home() {
   }, [loadProfiles]);
 
   const refreshNormalization = useCallback(async () => {
-    if (provider !== "burmese_production" || script.trim().length < 10) {
+    if (detectScriptLanguage(script).code !== "my" || script.trim().length < 10) {
       setNormalization(undefined);
       setNormalizationApproved(false);
       return;
@@ -114,7 +127,7 @@ export default function Home() {
     } finally {
       setNormalizationLoading(false);
     }
-  }, [provider, script]);
+  }, [script]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void refreshNormalization(), 450);
@@ -166,13 +179,8 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (provider !== "voxcpm2" && provider !== "burmese_production") {
-      setProviderHealth(undefined);
-      return;
-    }
-
     void refreshProviderHealth();
-  }, [provider, refreshProviderHealth]);
+  }, [refreshProviderHealth]);
 
   const scriptError = useMemo(() => {
     const trimmed = script.trim();
@@ -274,7 +282,16 @@ export default function Home() {
   }
 
   async function generateAudio() {
-    const preflight = preflightProvider({ provider, script, referenceAudio, voiceProfileId: selectedProfileId || undefined, referenceText, normalizationApproved, cloneMode });
+    const preflight = preflightProvider({
+      provider,
+      script,
+      referenceAudio: voiceMode === "design" ? undefined : referenceAudio,
+      voiceProfileId: voiceMode === "design" ? undefined : selectedProfileId || undefined,
+      referenceText,
+      normalizationApproved,
+      cloneMode,
+      voiceDescription: voiceMode === "design" ? voiceDescription : undefined
+    });
     if (scriptError || !preflight.ok) {
       setError(preflight.message);
       setStatus("failed");
@@ -283,9 +300,9 @@ export default function Home() {
     setStatus("saving");
     setError("");
     setAudioResult(undefined);
+    setProgress(undefined);
 
     try {
-      setStatus("generating");
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -298,11 +315,13 @@ export default function Home() {
           emotion,
           cloneMode,
           cloneStrength,
+          inferenceTimesteps,
           denoiseReference,
           normalizeText,
-          referenceAudio,
+          referenceAudio: voiceMode === "design" ? undefined : referenceAudio,
           referenceText,
-          voiceProfileId: selectedProfileId || undefined,
+          voiceDescription: voiceMode === "design" ? voiceDescription : undefined,
+          voiceProfileId: voiceMode === "design" ? undefined : selectedProfileId || undefined,
           referenceQualityReport,
           approvedNormalizedScript: normalization?.normalizedScript,
           lexiconRevision: normalization?.lexiconRevision,
@@ -311,51 +330,96 @@ export default function Home() {
       });
       const data = await response.json();
 
-      if (!response.ok || data.status === "failed") {
+      if (!response.ok || data.status === "failed" || !data.jobId) {
         throw new Error(data.message || data.error || "Generation failed");
       }
 
-      setAudioResult({
-        audioUrl: data.audioUrl,
-        filename: data.filename,
-        provider: data.provider,
-        createdAt: data.createdAt
-      });
-      setStatus("completed");
+      // Generation runs in the background; poll the job for live progress and the final audio so a
+      // long, multi-chunk script isn't tied to one long-lived request.
+      setStatus("generating");
+      const jobId: string = data.jobId;
+      const deadline = Date.now() + 40 * 60 * 1000;
+
+      for (;;) {
+        if (Date.now() > deadline) {
+          throw new Error("Generation is taking unusually long. Check the History tab for this job.");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1300));
+
+        let job: {
+          status?: string;
+          completedChunks?: number;
+          totalChunks?: number;
+          progressMessage?: string;
+          audioUrl?: string;
+          audioFile?: string;
+          provider?: string;
+          createdAt?: string;
+          error?: string;
+        };
+        try {
+          const poll = await fetch(`/api/history/${jobId}`, { cache: "no-store" });
+          if (!poll.ok) continue;
+          job = await poll.json();
+        } catch {
+          continue; // transient network hiccup — keep polling
+        }
+
+        if (typeof job.totalChunks === "number" && job.totalChunks > 0) {
+          setProgress({ completed: job.completedChunks ?? 0, total: job.totalChunks, message: job.progressMessage ?? "" });
+        }
+
+        if (job.status === "completed" && job.audioUrl) {
+          setAudioResult({
+            audioUrl: job.audioUrl,
+            filename: job.audioFile || "",
+            provider: job.provider || provider,
+            createdAt: job.createdAt || ""
+          });
+          setStatus("completed");
+          setProgress(undefined);
+          return;
+        }
+        if (job.status === "failed") {
+          throw new Error(job.error || "Generation failed");
+        }
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Generation failed");
       setStatus("failed");
+      setProgress(undefined);
     }
   }
 
   const isGenerating = status === "saving" || status === "generating";
-  const referenceRequirementError =
-    provider === "burmese_production"
-      ? referenceAudioError ||
-        (!referenceAudio && !selectedProfileId
-          ? "Burmese production cloning requires clean reference voice data."
-          : referenceAudio?.durationSeconds && referenceAudio.durationSeconds < 3
-            ? "Reference audio is too short. Use at least 3 seconds, ideally 6-15 seconds."
-            : referenceAudio?.durationSeconds && referenceAudio.durationSeconds > 50
-              ? "Reference audio is too long for VoxCPM2. Trim it to 6-30 seconds of clean speech."
-              : "")
-      : provider === "voxcpm2"
-        ? referenceAudioError ||
-          (!referenceAudio && !selectedProfileId
-            ? "VoxCPM2 requires reference audio for voice cloning."
-            : referenceAudio?.durationSeconds && referenceAudio.durationSeconds < 3
-              ? "Reference audio is too short. Use at least 3 seconds, ideally 6-15 seconds."
-              : referenceAudio?.durationSeconds && referenceAudio.durationSeconds > 50
-                ? "Reference audio is too long for VoxCPM2. Trim it to 6-30 seconds of clean speech."
-                : "")
-      : referenceAudioError;
+  const isDesign = voiceMode === "design";
+  const referenceRequirementError = isDesign
+    ? voiceDescription.trim()
+      ? ""
+      : "Describe the voice to design (e.g. a calm young man, warm tone)."
+    : referenceAudioError ||
+      (!referenceAudio && !selectedProfileId
+        ? "VoxCPM2 requires reference audio for voice cloning."
+        : referenceAudio?.durationSeconds && referenceAudio.durationSeconds < 3
+          ? "Reference audio is too short. Use at least 3 seconds, ideally 6-15 seconds."
+          : referenceAudio?.durationSeconds && referenceAudio.durationSeconds > 50
+            ? "Reference audio is too long for VoxCPM2. Trim it to 6-30 seconds of clean speech."
+            : "");
   const generateDisabled =
     Boolean(scriptError) ||
     isGenerating ||
-    ((provider === "voxcpm2" || provider === "burmese_production") &&
-      ((!referenceAudio && !selectedProfileId) || Boolean(referenceRequirementError))) ||
-    (provider === "burmese_production" && (referenceQualityReport?.status === "block" || !referenceText.trim() || !normalizationApproved));
-  const activePreflight: ProviderPreflightResult = preflightProvider({ provider, script, referenceAudio, voiceProfileId: selectedProfileId || undefined, referenceText, normalizationApproved, cloneMode });
+    Boolean(referenceRequirementError) ||
+    (isBurmeseScript && (referenceQualityReport?.status === "block" || !normalizationApproved));
+  const activePreflight: ProviderPreflightResult = preflightProvider({
+    provider,
+    script,
+    referenceAudio: isDesign ? undefined : referenceAudio,
+    voiceProfileId: isDesign ? undefined : selectedProfileId || undefined,
+    referenceText,
+    normalizationApproved,
+    cloneMode,
+    voiceDescription: isDesign ? voiceDescription : undefined
+  });
   const capabilityDisabled = !activePreflight.ok;
   const disabledReason =
     scriptError ||
@@ -409,7 +473,7 @@ export default function Home() {
               onTitleChange={setTitle}
               onScriptChange={setScript}
             />
-            {provider === "burmese_production" && (
+            {isBurmeseScript && (
               <NormalizationApprovalPanel result={normalization} loading={normalizationLoading} approved={normalizationApproved} onRefresh={() => void refreshNormalization()} onApprove={() => setNormalizationApproved(true)} />
             )}
           </div>
@@ -417,10 +481,16 @@ export default function Home() {
           <aside className="grid content-start gap-5">
             <VoiceSettings
               provider={provider}
+              voiceMode={voiceMode}
+              onVoiceModeChange={setVoiceMode}
+              voiceDescription={voiceDescription}
+              onVoiceDescriptionChange={setVoiceDescription}
               speed={speed}
               emotion={emotion}
               cloneMode={cloneMode}
               cloneStrength={cloneStrength}
+              inferenceTimesteps={inferenceTimesteps}
+              onInferenceTimestepsChange={setInferenceTimesteps}
               denoiseReference={denoiseReference}
               normalizeText={normalizeText}
               referenceAudio={referenceAudio}
@@ -431,7 +501,6 @@ export default function Home() {
               referenceAudioError={referenceRequirementError}
               providerHealth={providerHealth}
               providerHealthLoading={providerHealthLoading}
-              onProviderChange={setProvider}
               onSpeedChange={setSpeed}
               onEmotionChange={setEmotion}
               onCloneModeChange={setCloneMode}
@@ -452,7 +521,7 @@ export default function Home() {
               disabledReason={disabledReason}
               onClick={generateAudio}
             />
-            <StatusPanel status={status} error={error} />
+            <StatusPanel status={status} error={error} completedChunks={progress?.completed} totalChunks={progress?.total} progressMessage={progress?.message} />
             <AudioPreview result={audioResult} />
           </aside>
         </div>

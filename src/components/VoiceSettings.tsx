@@ -11,16 +11,26 @@ export interface ProviderHealth {
   ok: boolean;
   status: ProviderHealthStatus;
   message: string;
+  baseUrl?: string;
   latencyMs?: number;
   checkedAt?: string;
 }
 
+function isLocalUrl(url?: string) {
+  return Boolean(url && /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(url));
+}
+
 interface VoiceSettingsProps {
   provider: VoiceProvider;
+  voiceMode: "clone" | "design";
+  onVoiceModeChange: (value: "clone" | "design") => void;
+  voiceDescription: string;
+  onVoiceDescriptionChange: (value: string) => void;
   speed: number;
   emotion: VoiceEmotion;
   cloneMode: CloneMode;
   cloneStrength: number;
+  inferenceTimesteps: number;
   denoiseReference: boolean;
   normalizeText: boolean;
   referenceAudio?: ReferenceAudioPayload;
@@ -31,11 +41,11 @@ interface VoiceSettingsProps {
   referenceAudioError?: string;
   providerHealth?: ProviderHealth;
   providerHealthLoading?: boolean;
-  onProviderChange: (value: VoiceProvider) => void;
   onSpeedChange: (value: number) => void;
   onEmotionChange: (value: VoiceEmotion) => void;
   onCloneModeChange: (value: CloneMode) => void;
   onCloneStrengthChange: (value: number) => void;
+  onInferenceTimestepsChange: (value: number) => void;
   onDenoiseReferenceChange: (value: boolean) => void;
   onNormalizeTextChange: (value: boolean) => void;
   onReferenceAudioChange: (file: File | null) => void;
@@ -48,11 +58,11 @@ interface VoiceSettingsProps {
 }
 
 const healthLabel: Record<ProviderHealthStatus, string> = {
-  connected: "HF connected",
-  timeout: "HF timeout",
-  rate_limited: "HF rate limited",
-  unavailable: "HF unavailable",
-  invalid_response: "HF invalid response"
+  connected: "connected",
+  timeout: "timeout",
+  rate_limited: "rate limited",
+  unavailable: "unavailable",
+  invalid_response: "invalid response"
 };
 
 const healthClassName: Record<ProviderHealthStatus, string> = {
@@ -65,6 +75,10 @@ const healthClassName: Record<ProviderHealthStatus, string> = {
 
 export function VoiceSettings({
   provider,
+  voiceMode,
+  onVoiceModeChange,
+  voiceDescription,
+  onVoiceDescriptionChange,
   speed,
   emotion,
   cloneMode,
@@ -79,11 +93,12 @@ export function VoiceSettings({
   referenceAudioError,
   providerHealth,
   providerHealthLoading = false,
-  onProviderChange,
   onSpeedChange,
   onEmotionChange,
   onCloneModeChange,
   onCloneStrengthChange,
+  inferenceTimesteps,
+  onInferenceTimestepsChange,
   onDenoiseReferenceChange,
   onNormalizeTextChange,
   onReferenceAudioChange,
@@ -95,12 +110,86 @@ export function VoiceSettings({
   onRefreshProviderHealth
 }: VoiceSettingsProps) {
   const referenceAssessment = assessReferenceAudio(referenceAudio);
-  const isCloneProvider = provider === "voxcpm2" || provider === "burmese_production";
+  const isCloneProvider = provider === "voxcpm2";
   const [profileName, setProfileName] = useState("");
   const [profileConsent, setProfileConsent] = useState(false);
   const [lexiconOpen, setLexiconOpen] = useState(false);
   const [lexiconEntries, setLexiconEntries] = useState<BurmeseLexiconEntry[]>([]);
   const [lexiconError, setLexiconError] = useState("");
+  const [endpoint, setEndpoint] = useState("");
+  const [endpointSaving, setEndpointSaving] = useState(false);
+  const [endpointNote, setEndpointNote] = useState("");
+  const [localStatus, setLocalStatus] = useState({ configured: false, running: false, reachable: false });
+
+  const refreshLocalStatus = () =>
+    fetch("/api/voxcpm-local", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => setLocalStatus(data))
+      .catch(() => undefined);
+
+  useEffect(() => {
+    void fetch("/api/settings/voxcpm2-endpoint", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => setEndpoint(data.baseUrl || ""))
+      .catch(() => undefined);
+    void refreshLocalStatus();
+  }, []);
+
+  async function saveEndpoint(url: string) {
+    setEndpointSaving(true);
+    setEndpointNote("");
+    try {
+      const response = await fetch("/api/settings/voxcpm2-endpoint", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ baseUrl: url })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setEndpointNote(data.error || "Could not save the endpoint.");
+        return;
+      }
+      if (data.baseUrl) setEndpoint(data.baseUrl);
+      setEndpointNote(`Saved. Checking ${data.baseUrl} …`);
+      onRefreshProviderHealth?.();
+      await refreshLocalStatus();
+    } finally {
+      setEndpointSaving(false);
+    }
+  }
+
+  async function startLocal() {
+    setEndpointSaving(true);
+    setEndpointNote("");
+    try {
+      const response = await fetch("/api/voxcpm-local", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) {
+        setEndpointNote(data.error || "Could not start local VoxCPM.");
+        return;
+      }
+      setEndpoint("http://localhost:7860");
+      setEndpointNote(
+        data.alreadyRunning
+          ? "Local VoxCPM is already up — click Save & check."
+          : "Starting locally. First run downloads the model (minutes). Click Save & check when it's ready."
+      );
+      await refreshLocalStatus();
+    } finally {
+      setEndpointSaving(false);
+    }
+  }
+
+  async function stopLocal() {
+    setEndpointSaving(true);
+    try {
+      await fetch("/api/voxcpm-local", { method: "DELETE" });
+      setEndpointNote("Local VoxCPM stopped.");
+      await refreshLocalStatus();
+    } finally {
+      setEndpointSaving(false);
+    }
+  }
 
   useEffect(() => {
     if (!lexiconOpen) return;
@@ -137,51 +226,29 @@ export function VoiceSettings({
         </div>
       </div>
       <div className="mt-5 grid gap-4">
-        <label className="grid gap-2 text-sm font-medium text-studio-muted">
-          Provider
-          <select
-            value={provider}
-            onChange={(event) => onProviderChange(event.target.value as VoiceProvider)}
-            className="studio-control-bg rounded-2xl border border-white/10 px-3 py-3 text-studio-text outline-none focus:border-studio-accent"
-          >
-            <option value="burmese_production">Burmese Production (recommended)</option>
-            <option value="voxcpm2">VoxCPM2 Multilingual</option>
-          </select>
-          {/* <p className="text-xs leading-relaxed text-studio-muted">
-            {provider === "burmese_production"
-              ? "Recommended for Burmese scripts. Uses the shared VoxCPM2 engine with Burmese-only validation."
-              : "Direct VoxCPM2 engine access for supported multilingual scripts."}
-          </p> */}
-        </label>
+        {/* <div className="grid gap-2 text-sm font-medium text-studio-muted">
+          Engine
+          <div className="studio-control-bg rounded-2xl border border-white/10 px-3 py-3 text-studio-text">
+            VoxCPM2 Multilingual
+            <span className="ml-2 text-xs font-normal text-studio-muted">Burmese pronunciation QA applies automatically</span>
+          </div>
+        </div> */}
 
         {isCloneProvider && (
           <div className="studio-nested-card-bg grid gap-3 rounded-[1.8rem] border border-white/10 p-4">
             <div className="flex flex-wrap items-center gap-2">
-              {provider === "voxcpm2" ? (
-                <>
-                  <span className="inline-flex items-center gap-2 rounded-full border border-studio-accent/30 bg-studio-accent/10 px-3 py-1 text-xs font-semibold text-emerald-800">
-                    <Mic2 size={13} /> VoxCPM2 multilingual inference
-                  </span>
-                  <span className="rounded-full border border-amber-300/45 bg-amber-400/10 px-3 py-1 text-xs font-semibold text-amber-700">
-                    Public shared inference may be slow
-                  </span>
-                </>
-              ) : (
-                <>
-                  <span className="inline-flex items-center gap-2 rounded-full border border-studio-accent/30 bg-studio-accent/10 px-3 py-1 text-xs font-semibold text-emerald-800">
-                    <Mic2 size={13} /> Burmese production preset
-                  </span>
-                  <span className="rounded-full border border-amber-300/45 bg-amber-400/10 px-3 py-1 text-xs font-semibold text-amber-700">
-                    Powered by VoxCPM2 remote inference
-                  </span>
-                </>
-              )}
+              <span className="inline-flex items-center gap-2 rounded-full border border-studio-accent/30 bg-studio-accent/10 px-3 py-1 text-xs font-semibold text-emerald-800">
+                <Mic2 size={13} /> VoxCPM2 multilingual inference
+              </span>
+              <span className="rounded-full border border-amber-300/45 bg-amber-400/10 px-3 py-1 text-xs font-semibold text-amber-700">
+                Public shared inference may be slow
+              </span>
             </div>
 
             <div className="studio-control-bg grid gap-2 rounded-2xl border border-white/10 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="inline-flex items-center gap-2 text-sm font-semibold text-studio-text">
-                  <Server size={15} /> HF backend
+                  <Server size={15} /> VoxCPM endpoint
                 </span>
                 <div className="flex items-center gap-2">
                   <span
@@ -190,7 +257,11 @@ export function VoiceSettings({
                         : "border-slate-300 bg-slate-100 text-slate-600"
                       }`}
                   >
-                    {providerHealthLoading ? "Checking..." : providerHealth ? healthLabel[providerHealth.status] : "Not checked"}
+                    {providerHealthLoading
+                      ? "Checking..."
+                      : providerHealth
+                        ? `${isLocalUrl(providerHealth.baseUrl) ? "Local" : "HF"} ${healthLabel[providerHealth.status]}`
+                        : "Not checked"}
                   </span>
                   {onRefreshProviderHealth && (
                     <button
@@ -206,13 +277,50 @@ export function VoiceSettings({
                 </div>
               </div>
               <p className="text-xs leading-relaxed text-studio-muted">
-                {providerHealth?.message || "Checks the public Hugging Face Space before remote generation."}
+                {providerHealth?.message || "Checks the selected VoxCPM endpoint before remote generation."}
                 {providerHealth?.latencyMs !== undefined && providerHealth.latencyMs > 0
                   ? ` ${providerHealth.latencyMs}ms.`
                   : ""}
               </p>
+              <input
+                value={endpoint}
+                onChange={(event) => setEndpoint(event.target.value)}
+                placeholder="https://...hf.space or http://localhost:7860"
+                className="rounded-xl border border-studio-border bg-white/60 px-3 py-2 text-xs text-studio-text outline-none"
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" onClick={() => setEndpoint("https://openbmb-voxcpm-demo.hf.space")} className="studio-soft-chip-bg rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-studio-text">HF Space</button>
+                <button type="button" onClick={() => setEndpoint("http://localhost:7860")} className="studio-soft-chip-bg rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-studio-text">Local</button>
+                <button type="button" disabled={endpointSaving || !endpoint.trim()} onClick={() => void saveEndpoint(endpoint)} className="rounded-full bg-studio-accent px-3 py-1 text-xs font-semibold text-white disabled:opacity-45">
+                  {endpointSaving ? "Saving..." : "Save & check"}
+                </button>
+              </div>
+              {localStatus.configured && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-studio-muted">
+                    Local server: {localStatus.reachable ? "running" : localStatus.running ? "starting…" : "stopped"}
+                  </span>
+                  <button type="button" disabled={endpointSaving || localStatus.reachable || localStatus.running} onClick={() => void startLocal()} className="studio-soft-chip-bg rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-studio-text disabled:opacity-45">Start</button>
+                  <button type="button" disabled={endpointSaving || !localStatus.running} onClick={() => void stopLocal()} className="studio-soft-chip-bg rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-studio-text disabled:opacity-45">Stop</button>
+                </div>
+              )}
+              {endpointNote && <p className="text-xs leading-5 text-studio-muted">{endpointNote}</p>}
             </div>
 
+            <div className="flex gap-2">
+              <button type="button" onClick={() => onVoiceModeChange("clone")} className={`flex-1 rounded-full border px-3 py-1.5 text-xs font-semibold ${voiceMode === "clone" ? "border-studio-accent bg-studio-accent/10 text-emerald-800" : "border-white/10 text-studio-muted"}`}>Clone a voice</button>
+              <button type="button" onClick={() => onVoiceModeChange("design")} className={`flex-1 rounded-full border px-3 py-1.5 text-xs font-semibold ${voiceMode === "design" ? "border-studio-accent bg-studio-accent/10 text-emerald-800" : "border-white/10 text-studio-muted"}`}>Design a voice</button>
+            </div>
+
+            {voiceMode === "design" && (
+              <label className="grid gap-2 text-sm font-medium text-studio-muted">
+                Voice description
+                <textarea value={voiceDescription} onChange={(event) => onVoiceDescriptionChange(event.target.value)} maxLength={500} placeholder="A calm young man, warm tone, slightly slow…" className="studio-control-bg min-h-24 rounded-2xl border border-white/10 px-3 py-3 text-studio-text outline-none focus:border-studio-accent" />
+                <span className="text-xs font-normal text-studio-muted">No reference needed — VoxCPM2 creates a new voice from this description.</span>
+              </label>
+            )}
+
+            {voiceMode === "clone" && (<>
             <label className="grid gap-2 text-sm font-medium text-studio-muted">
               Saved voice profile
               <select value={selectedProfileId || ""} onChange={(event) => onProfileSelect(event.target.value)} className="studio-control-bg rounded-2xl border border-white/10 px-3 py-3 text-studio-text outline-none focus:border-studio-accent">
@@ -237,11 +345,7 @@ export function VoiceSettings({
                   })`
                   : selectedProfileId
                     ? "Saved local voice profile selected."
-                    : provider === "voxcpm2"
-                      ? "Upload a clean voice reference for VoxCPM2 cloning."
-                      : provider === "burmese_production"
-                        ? "Upload clean Burmese voice data. This will run through the VoxCPM2 backend."
-                        : "Upload a 3-10 second audio sample for the remote Space.")}
+                    : "Upload a clean voice reference for VoxCPM2 cloning.")}
             </p>
 
             {(referenceAudio || selectedProfileId) && (
@@ -260,9 +364,9 @@ export function VoiceSettings({
             )}
 
             <label className="grid gap-2 text-sm font-medium text-studio-muted">
-              Exact reference transcript
-              <textarea value={referenceText} onChange={(event) => onReferenceTextChange(event.target.value)} maxLength={2000} placeholder="Paste the exact words spoken in the reference audio..." className="studio-control-bg min-h-24 rounded-2xl border border-white/10 px-3 py-3 text-studio-text outline-none focus:border-studio-accent" />
-              <span className="text-xs leading-5">Required for Burmese high-fidelity cloning. The transcript is sent with the reference audio to improve similarity.</span>
+              Reference transcript <span className="font-normal text-studio-muted">(optional)</span>
+              <textarea value={referenceText} onChange={(event) => onReferenceTextChange(event.target.value)} maxLength={2000} placeholder="Optional notes — not required to generate..." className="studio-control-bg min-h-24 rounded-2xl border border-white/10 px-3 py-3 text-studio-text outline-none focus:border-studio-accent" />
+              <span className="text-xs leading-5">Optional. Cloning uses the reference audio only — you don&apos;t need to type the transcript, and it is not sent to the model.</span>
             </label>
 
             {referenceAudio && !selectedProfileId && (
@@ -272,7 +376,7 @@ export function VoiceSettings({
                   <input type="checkbox" checked={profileConsent} onChange={(event) => setProfileConsent(event.target.checked)} className="mt-1 h-4 w-4 accent-studio-accent" />
                   Save this consented voice sample and transcript on this device for repeated use.
                 </label>
-                <button type="button" disabled={!profileName.trim() || !profileConsent || !referenceText.trim() || referenceQualityReport?.status === "block"} onClick={() => onProfileSave(profileName, profileConsent)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-studio-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-45">
+                <button type="button" disabled={!profileName.trim() || !profileConsent || referenceQualityReport?.status === "block"} onClick={() => onProfileSave(profileName, profileConsent)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-studio-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-45">
                   <Save size={15} /> Save Local Profile
                 </button>
               </div>
@@ -282,6 +386,7 @@ export function VoiceSettings({
                 <Trash2 size={15} /> Delete Selected Profile
               </button>
             )}
+            </>)}
           </div>
         )}
 
@@ -314,6 +419,22 @@ export function VoiceSettings({
                   onChange={(event) => onCloneStrengthChange(Number(event.target.value))}
                   className="accent-studio-accent"
                 />
+              </label>
+
+              <label className="grid gap-3 text-sm font-medium text-studio-muted">
+                <span className="flex justify-between">
+                  Quality steps <span className="text-studio-text">{inferenceTimesteps}</span>
+                </span>
+                <input
+                  type="range"
+                  min="4"
+                  max="50"
+                  step="1"
+                  value={inferenceTimesteps}
+                  onChange={(event) => onInferenceTimestepsChange(Number(event.target.value))}
+                  className="accent-studio-accent"
+                />
+                <span className="text-xs font-normal text-studio-muted">Higher = better quality, slower. Local server only (ignored on HF Space).</span>
               </label>
 
               <div className="grid gap-3 text-sm text-studio-muted">
@@ -372,11 +493,9 @@ export function VoiceSettings({
         </label>
       </div>
 
-      {provider === "burmese_production" && (
-        <button type="button" onClick={() => setLexiconOpen(true)} className="studio-soft-chip-bg mt-4 inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-studio-text">
-          <Settings size={14} /> Burmese Pronunciation Lexicon
-        </button>
-      )}
+      <button type="button" onClick={() => setLexiconOpen(true)} className="studio-soft-chip-bg mt-4 inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-studio-text">
+        <Settings size={14} /> Burmese Pronunciation Lexicon
+      </button>
 
       {lexiconOpen && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/30 px-4 backdrop-blur-sm">

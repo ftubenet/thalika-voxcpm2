@@ -24,7 +24,7 @@ const requestSchema = z.object({
     size: z.number().positive().max(10 * 1024 * 1024),
     durationSeconds: z.number().positive().optional()
   }),
-  referenceText: z.string().trim().min(1).max(2000),
+  referenceText: z.string().trim().max(2000).optional().default(""),
   qualityReport: qualitySchema,
   preferredCloneMode: z.enum(["balanced", "high_fidelity"]).optional(),
   preferredCloneStrength: z.number().min(1).max(3).optional(),

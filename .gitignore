@@ -35,15 +35,14 @@ Thumbs.db
 .idea/
 .vscode/
 
-# Local Thalika runtime data
-data/scripts/*
-data/jobs/*
-data/outputs/*
-data/outputs/legacy-backup/
-data/profiles/*
-data/reviews/*
-data/memory/*
-data/logs/*
+# Local Thalika runtime data (ignore all files and nested directories)
+data/scripts/**
+data/jobs/**
+data/outputs/**
+data/profiles/**
+data/reviews/**
+data/memory/**
+data/logs/**
 
 # Keep shareable folder placeholders and examples
 !data/scripts/.gitkeep
@@ -52,3 +51,33 @@ data/logs/*
 !data/profiles/.gitkeep
 !data/reviews/.gitkeep
 !data/memory/MEMORY.example.md
+
+# Global privacy safeguard: prevent accidental commit of voice references, audio outputs, or media
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.opus
+*.pcm
+
+# Local VoxCPM2 server runtime artifacts (the local-server/ source is tracked)
+local-server/.voxcpm-venv/
+local-server/__pycache__/
+local-server/*.pyc
+local-server/models/
+
+# Global safeguard: AI model weights, checkpoints, and general Python environments
+*.safetensors
+*.pth
+*.pt
+*.onnx
+*.ckpt
+*.gguf
+*.bin
+huggingface/
+checkpoints/
+venv/
+.venv/
+env/
+*.egg-info/

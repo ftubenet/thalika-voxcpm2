@@ -1,3 +1,4 @@
+import { readEnvKey } from "../storage/env-store";
 import { fetchWithTimeout, getHFRequestTimeout, readJsonResponse, TimeoutError } from "./hf-utils";
 
 export type VoxCPM2HealthStatus = "connected" | "timeout" | "rate_limited" | "unavailable" | "invalid_response";
@@ -15,11 +16,27 @@ export interface VoxCPM2Health {
   checkedAt: string;
 }
 
-const defaultVoxCPM2SpaceUrl = "https://openbmb-voxcpm-demo.hf.space";
+// Local-first default: the managed local VoxCPM2 server (scripts/voxcpm-local.sh) exposes the
+// same /generate contract the app speaks and gives full control over inference_timesteps (the
+// biggest stability/quality lever, locked out on the public Space). Point HF_VOXCPM2_URL at the
+// public/demo Space explicitly if you want remote inference instead.
+const localVoxCPM2Url = "http://localhost:7860";
+const publicSpaceFallback = "https://openbmb-voxcpm-demo.hf.space";
 
-export function getVoxCPM2BaseUrl() {
-  return (process.env.HF_VOXCPM2_URL || defaultVoxCPM2SpaceUrl).replace(/\/+$/, "");
+// Precedence: user setting (.env.local, set in-app) > env > local default.
+export async function getVoxCPM2BaseUrl() {
+  const stored = await readEnvKey("HF_VOXCPM2_URL");
+  return (stored || process.env.HF_VOXCPM2_URL || localVoxCPM2Url).replace(/\/+$/, "");
 }
+
+// True when the active endpoint is the local server. Used to enable local-only levers (extra
+// /generate args like inference_timesteps) that the public Space's fixed signature would reject.
+export async function isLocalVoxCPM2Endpoint() {
+  const baseUrl = await getVoxCPM2BaseUrl();
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(baseUrl);
+}
+
+export const VOXCPM2_PUBLIC_SPACE_URL = publicSpaceFallback;
 
 function makeHealth(
   status: VoxCPM2HealthStatus,
@@ -77,7 +94,7 @@ async function probeJson(baseUrl: string, endpoint: string) {
       baseUrl,
       endpoint,
       latencyMs,
-      message: "Public Hugging Face Space is rate limited."
+      message: `${endpointName(baseUrl)} is rate limited.`
     });
   }
 
@@ -86,7 +103,7 @@ async function probeJson(baseUrl: string, endpoint: string) {
       baseUrl,
       endpoint,
       latencyMs,
-      message: "Hugging Face Space is currently unavailable."
+      message: `${endpointName(baseUrl)} is currently unavailable.`
     });
   }
 
@@ -95,7 +112,7 @@ async function probeJson(baseUrl: string, endpoint: string) {
       baseUrl,
       endpoint,
       latencyMs,
-      message: `Hugging Face Space returned HTTP ${response.status}.`
+      message: `${endpointName(baseUrl)} returned HTTP ${response.status}.`
     });
   }
 
@@ -112,8 +129,12 @@ async function probeJson(baseUrl: string, endpoint: string) {
   }
 }
 
+function endpointName(baseUrl: string) {
+  return /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(baseUrl) ? "Local VoxCPM server" : "Hugging Face Space";
+}
+
 export async function checkVoxCPM2Health(): Promise<VoxCPM2Health> {
-  const baseUrl = getVoxCPM2BaseUrl();
+  const baseUrl = await getVoxCPM2BaseUrl();
 
   try {
     const info = await probeJson(baseUrl, "/gradio_api/info");
@@ -123,7 +144,7 @@ export async function checkVoxCPM2Health(): Promise<VoxCPM2Health> {
         baseUrl,
         endpoint: "/gradio_api/info",
         latencyMs: info.latencyMs,
-        message: "VoxCPM2 Hugging Face Space is connected and exposes /generate."
+        message: `${endpointName(baseUrl)} is connected and exposes /generate.`
       });
     }
 
@@ -134,7 +155,7 @@ export async function checkVoxCPM2Health(): Promise<VoxCPM2Health> {
         baseUrl,
         endpoint: "/config",
         latencyMs: config.latencyMs,
-        message: "VoxCPM2 Hugging Face Space is connected and exposes generate."
+        message: `${endpointName(baseUrl)} is connected and exposes generate.`
       });
     }
 
@@ -158,7 +179,7 @@ export async function checkVoxCPM2Health(): Promise<VoxCPM2Health> {
       baseUrl,
       endpoint: "/gradio_api/info",
       latencyMs: 0,
-      message: "Hugging Face Space is currently unavailable."
+      message: `${endpointName(baseUrl)} is currently unavailable.`
     });
   }
 }

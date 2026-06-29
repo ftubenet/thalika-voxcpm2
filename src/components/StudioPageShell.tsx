@@ -19,9 +19,9 @@ export function StudioPageShell({ activeTab, badge, title, description, aside, c
 
         <div className="grid gap-5 px-1 pb-1 pt-1 lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.62fr)] lg:items-end">
           <div>
-            <p className="mb-3 inline-flex items-center gap-2 rounded-full border border-studio-accent/25 bg-studio-accent/10 px-3 py-1 text-xs font-semibold text-emerald-800">
+            {/* <p className="mb-3 inline-flex items-center gap-2 rounded-full border border-studio-accent/25 bg-studio-accent/10 px-3 py-1 text-xs font-semibold text-emerald-800">
               <Sparkles size={14} /> {badge}
-            </p>
+            </p> */}
             <h1 className="max-w-3xl text-4xl font-semibold tracking-normal text-studio-text sm:text-5xl">{title}</h1>
             <p className="mt-3 max-w-2xl text-base leading-7 text-studio-muted">{description}</p>
           </div>

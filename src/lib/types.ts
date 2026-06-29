@@ -1,4 +1,4 @@
-export type VoiceProvider = "voxcpm2" | "burmese_production";
+export type VoiceProvider = "voxcpm2";
 export type OutputFormat = "wav" | "mp3";
 export type VoiceEmotion = "neutral" | "calm" | "energetic" | "dramatic";
 export type CloneMode = "balanced" | "high_fidelity";
@@ -117,6 +117,8 @@ export interface GenerateVoiceRequest {
   emotion: VoiceEmotion;
   cloneMode?: CloneMode;
   cloneStrength?: number;
+  inferenceTimesteps?: number;
+  voiceDescription?: string;
   denoiseReference?: boolean;
   normalizeText?: boolean;
   referenceAudio?: ReferenceAudioPayload;
@@ -145,6 +147,8 @@ export interface GenerateVoiceResult {
   audioFilePath: string;
   format: OutputFormat;
   localAudioUrl?: string;
+  // Optional un-mastered sibling output kept only when THALIKA_KEEP_RAW_OUTPUT is set, for A/B QA.
+  rawAudioFile?: string;
   metadata?: Record<string, string | number | boolean>;
 }
 
@@ -167,6 +171,7 @@ export interface JobRecord {
   emotion: VoiceEmotion;
   status: JobStatus;
   audioFile?: string;
+  rawAudioFile?: string;
   error?: string;
   completedChunks?: number;
   totalChunks?: number;

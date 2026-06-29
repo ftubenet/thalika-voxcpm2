@@ -54,7 +54,7 @@ export async function createVoiceProfile(input: {
     referenceText: input.referenceText.trim(),
     qualityReport: input.qualityReport,
     preferredCloneMode: input.preferredCloneMode || "high_fidelity",
-    preferredCloneStrength: input.preferredCloneStrength ?? 2.8,
+    preferredCloneStrength: input.preferredCloneStrength ?? 2,
     preferredDenoiseReference: input.preferredDenoiseReference ?? false,
     preferredNormalizeText: input.preferredNormalizeText ?? true,
     createdAt
@@ -67,13 +67,23 @@ export async function createVoiceProfile(input: {
 export async function listVoiceProfiles() {
   await ensureDataDirs();
   const entries = await fs.readdir(profilesDir, { withFileTypes: true });
-  const profiles = await Promise.all(
-    entries.filter((entry) => entry.isFile() && /^profile_[a-zA-Z0-9_-]+\.json$/.test(entry.name)).map(async (entry) => {
-      const profile = JSON.parse(await fs.readFile(safeJoin(profilesDir, entry.name), "utf8")) as VoiceProfileRecord;
-      return publicProfile(profile);
-    })
+  const results = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && /^profile_[a-zA-Z0-9_-]+\.json$/.test(entry.name))
+      .map(async (entry) => {
+        // Best-effort per file: a single corrupt or half-written profile JSON must not reject
+        // Promise.all and hide every other profile from the user.
+        try {
+          const profile = JSON.parse(await fs.readFile(safeJoin(profilesDir, entry.name), "utf8")) as VoiceProfileRecord;
+          return publicProfile(profile);
+        } catch {
+          return null;
+        }
+      })
   );
-  return profiles.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return results
+    .filter((profile): profile is VoiceProfileSummary => profile !== null)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export async function getVoiceProfile(id: string) {
