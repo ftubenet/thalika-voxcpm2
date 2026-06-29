@@ -111,6 +111,13 @@ export function VoiceSettings({
 }: VoiceSettingsProps) {
   const referenceAssessment = assessReferenceAudio(referenceAudio);
   const isCloneProvider = provider === "voxcpm2";
+  // Voice Design (no reference audio) only works on the local server — the public HF Space's
+  // Gradio app requires a reference. Gate the Design toggle by the checked endpoint, and if the
+  // user is somehow in Design mode against a non-local endpoint, flip them back to Clone.
+  const canDesign = isCloneProvider && isLocalUrl(providerHealth?.baseUrl);
+  useEffect(() => {
+    if (!canDesign && voiceMode === "design") onVoiceModeChange("clone");
+  }, [canDesign, voiceMode, onVoiceModeChange]);
   const [profileName, setProfileName] = useState("");
   const [profileConsent, setProfileConsent] = useState(false);
   const [lexiconOpen, setLexiconOpen] = useState(false);
@@ -309,8 +316,20 @@ export function VoiceSettings({
 
             <div className="flex gap-2">
               <button type="button" onClick={() => onVoiceModeChange("clone")} className={`flex-1 rounded-full border px-3 py-1.5 text-xs font-semibold ${voiceMode === "clone" ? "border-studio-accent bg-studio-accent/10 text-emerald-800" : "border-white/10 text-studio-muted"}`}>Clone a voice</button>
-              <button type="button" onClick={() => onVoiceModeChange("design")} className={`flex-1 rounded-full border px-3 py-1.5 text-xs font-semibold ${voiceMode === "design" ? "border-studio-accent bg-studio-accent/10 text-emerald-800" : "border-white/10 text-studio-muted"}`}>Design a voice</button>
+              <button
+                type="button"
+                disabled={!canDesign}
+                onClick={() => canDesign && onVoiceModeChange("design")}
+                title={canDesign ? "" : "Voice Design needs the local VoxCPM2 server (it accepts no reference audio). Start the local server or switch the endpoint to Local."}
+                className={`flex-1 rounded-full border px-3 py-1.5 text-xs font-semibold ${voiceMode === "design" ? "border-studio-accent bg-studio-accent/10 text-emerald-800" : "border-white/10 text-studio-muted"} disabled:opacity-40 disabled:cursor-not-allowed`}
+              >Design a voice</button>
             </div>
+            {!canDesign && voiceMode === "design" && (
+              <p className="text-xs text-amber-700">Voice Design needs the local VoxCPM2 server. Switch to Clone, or start the local server / point the endpoint at Local.</p>
+            )}
+            {!canDesign && voiceMode !== "design" && (
+              <p className="text-xs text-studio-muted">Voice Design is available on the local server only.</p>
+            )}
 
             {voiceMode === "design" && (
               <label className="grid gap-2 text-sm font-medium text-studio-muted">
