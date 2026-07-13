@@ -129,11 +129,8 @@ def handler(job):
     if ref_path:
         # Some versions/configs of VoxCPM load as VoxCPM (v1) instead of VoxCPM2,
         # which expects `prompt_wav_path` instead of `reference_wav_path`.
-        import inspect
         try:
-            # Check the underlying model's _generate signature
-            sig = inspect.signature(model.tts_model._generate)
-            has_ref = "reference_wav_path" in sig.parameters
+            has_ref = type(model.tts_model).__name__ == "VoxCPM2Model"
         except Exception:
             has_ref = True # fallback assumption
 
@@ -141,6 +138,9 @@ def handler(job):
             kwargs["reference_wav_path"] = ref_path
         else:
             kwargs["prompt_wav_path"] = ref_path
+            # VoxCPM v1 strictly requires prompt_text if prompt_wav_path is passed
+            if not kwargs.get("prompt_text"):
+                kwargs["prompt_text"] = prompt_text if prompt_text else ""
 
         if use_prompt_text and prompt_text:
             kwargs["prompt_wav_path"] = ref_path
