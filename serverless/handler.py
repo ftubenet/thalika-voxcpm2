@@ -132,7 +132,7 @@ def handler(job):
         import inspect
         try:
             # Check the underlying model's _generate signature
-            sig = inspect.signature(model.model._generate)
+            sig = inspect.signature(model.tts_model._generate)
             has_ref = "reference_wav_path" in sig.parameters
         except Exception:
             has_ref = True # fallback assumption
