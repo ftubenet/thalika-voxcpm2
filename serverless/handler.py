@@ -64,7 +64,7 @@ start_time = time.time()
 try:
     from voxcpm import VoxCPM
     model_path = get_model_path()
-    model = VoxCPM.from_pretrained(model_path, load_denoiser=False)
+    model = VoxCPM.from_pretrained(model_path, load_denoiser=False, optimize=False)
     load_time = time.time() - start_time
     print(f"[thalika-serverless] ✅ model loaded in {load_time:.1f}s", flush=True)
 except Exception as exc:
