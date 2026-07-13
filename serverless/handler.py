@@ -127,7 +127,21 @@ def handler(job):
     }
 
     if ref_path:
-        kwargs["reference_wav_path"] = ref_path
+        # Some versions/configs of VoxCPM load as VoxCPM (v1) instead of VoxCPM2,
+        # which expects `prompt_wav_path` instead of `reference_wav_path`.
+        import inspect
+        try:
+            # Check the underlying model's _generate signature
+            sig = inspect.signature(model.model._generate)
+            has_ref = "reference_wav_path" in sig.parameters
+        except Exception:
+            has_ref = True # fallback assumption
+
+        if has_ref:
+            kwargs["reference_wav_path"] = ref_path
+        else:
+            kwargs["prompt_wav_path"] = ref_path
+
         if use_prompt_text and prompt_text:
             kwargs["prompt_wav_path"] = ref_path
             kwargs["prompt_text"] = prompt_text
