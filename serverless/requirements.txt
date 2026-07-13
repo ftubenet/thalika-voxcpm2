@@ -1,0 +1,5 @@
+runpod>=1.7.0
+voxcpm
+soundfile
+numpy
+huggingface_hub

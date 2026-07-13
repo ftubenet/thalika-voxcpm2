@@ -1,0 +1,10 @@
+{
+  "input": {
+    "text": "မင်္ဂလာပါ ကျွန်တော်က သာလိကာ Voice Clone ဖြစ်ပါတယ်",
+    "control": "",
+    "cfg_value": 2.0,
+    "normalize": true,
+    "denoise": false,
+    "inference_timesteps": 10
+  }
+}
