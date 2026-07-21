@@ -1,5 +1,6 @@
 runpod>=1.7.0
 voxcpm==2.0.3
+torchcodec==0.1.1
 soundfile
 numpy
 huggingface_hub
